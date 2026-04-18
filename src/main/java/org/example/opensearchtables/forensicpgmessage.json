@@ -1,0 +1,37 @@
+{
+  "InvestigationBackupName": "iPhone 1970-01-01 00:00:00",
+  "InvestigationDeviceID": "3F633606-5379-47E2-AC11-01C029EFF688",
+  "InvestigationDeviceType": "iPhone13,3",
+  "InvestigationOSVersion": "18.6.2",
+  "InvestigationThreatIDs": [],
+  "InvestigationInsights": [
+    {
+      "InsightCategory": "Processes",
+      "InsightDescription": "Foreign Process /usr/sbin/appleh13camerad",
+      "InsightID": "nd1HmkRJaV",
+      "InsightRuleName": "di_processanalyzer",
+      "InsightRuleVersion": "12",
+      "InsightType": "IoC",
+      "InsightTimestampGeneration": 1737469015,
+      "InsightTimestampOriginal": 1701221685,
+      "ProcessCommand": "/usr/sbin/appleh13camerad",
+      "ProcessName": "/usr/sbin/appleh13camerad",
+      "ProcessPID": "151",
+      "ProcessUser": "mobile"
+    },
+    {
+      "InsightCategory": "Processes",
+      "InsightDescription": "Foreign Process cloudphotod",
+      "InsightID": "NgColWNzxk",
+      "InsightRuleName": "di_processanalyzer",
+      "InsightRuleVersion": "12",
+      "InsightType": "IoC",
+      "InsightTimestampGeneration": 1737469015,
+      "InsightTimestampOriginal": 1701221685,
+      "ProcessCommand": "cloudphotod",
+      "ProcessName": "cloudphotod",
+      "ProcessPID": "364",
+      "ProcessUser": "mobile"
+    }
+  ]
+}

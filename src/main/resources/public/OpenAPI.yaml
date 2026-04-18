@@ -1,0 +1,550 @@
+openapi: 3.0.3
+info:
+  title: OpenSearch to Postgres Migration API
+  description: APIs for migrating OpenSearch data to Postgres entities
+  version: 1.0.0
+servers:
+  - url: http://localhost:8180/migration/opensearch-to-postgres
+    description: Local server
+
+paths:
+  /migration/opensearch-to-postgres:
+    post:
+      summary: Migrate a forensic record to Postgres
+      description: Saves a ForensicInfo entity with nested InsightsInfo from a DTO. If id is omitted, a UUID will be generated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForensicInfoDto'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForensicInfoJson'
+        '400':
+          description: Bad Request
+
+  /migration/opensearch-to-postgres/query:
+    post:
+      summary: Query forensic records
+      description: Query forensic records with pagination, date filtering, and search terms. Requires appropriate roles.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForensicInfoQueryRequest'
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: terms
+          in: query
+          required: false
+          schema:
+            type: object
+      responses:
+        '200':
+          description: Page of forensic records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ForensicInfoJson'
+        '400':
+          description: Bad Request
+
+  /migration/opensearch-to-postgres/insights:
+    post:
+      summary: Query InsightsInfo records
+      description: Query InsightsInfo records with pagination, date filtering, and search terms. Requires appropriate roles.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: terms
+          in: query
+          required: false
+          schema:
+            type: object
+      responses:
+        '200':
+          description: Page of insights info records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InsightInfo'
+        '400':
+          description: Bad Request
+
+  /migration/opensearch-to-postgres/stats:
+    get:
+      summary: Get forensic statistics
+      description: Returns statistics for forensic records.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: terms
+          in: query
+          required: false
+          schema:
+            type: object
+        - name: Z-Client-Timezone
+          in: header
+          required: false
+          schema:
+            type: string
+            default: UTC
+      responses:
+        '200':
+          description: Forensic statistics
+          content:
+            application/json:
+              schema:
+                type: string
+        '400':
+          description: Bad Request
+
+  /migration/opensearch-to-postgres/statsByJavaAggregation:
+    get:
+      summary: Get forensic statistics by Java aggregation
+      description: Returns statistics for forensic records using Java aggregation.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: terms
+          in: query
+          required: false
+          schema:
+            type: object
+        - name: Z-Client-Timezone
+          in: header
+          required: false
+          schema:
+            type: string
+            default: UTC
+      responses:
+        '200':
+          description: Forensic statistics by Java aggregation
+          content:
+            application/json:
+              schema:
+                type: string
+        '400':
+          description: Bad Request
+
+  /migration/opensearch-to-postgres/statsByPostGresMaterializedViews:
+    get:
+      summary: Get forensic statistics by Postgres materialized views
+      description: Returns statistics for forensic records using Postgres materialized views.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: terms
+          in: query
+          required: false
+          schema:
+            type: object
+        - name: Z-Client-Timezone
+          in: header
+          required: false
+          schema:
+            type: string
+            default: UTC
+      responses:
+        '200':
+          description: Forensic statistics by Postgres materialized views
+          content:
+            application/json:
+              schema:
+                type: string
+        '400':
+          description: Bad Request
+
+components:
+  schemas:
+    ForensicInfoDto:
+      type: object
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        investigationId:
+          type: string
+        timeStartAnalysis:
+          type: string
+          format: date-time
+        timeEndAnalysis:
+          type: string
+          format: date-time
+        status:
+          type: string
+        source:
+          type: string
+        createdBy:
+          type: string
+        createdDate:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+        updatedDate:
+          type: string
+          format: date-time
+        deleted:
+          type: boolean
+        insights:
+          type: array
+          items:
+            $ref: '#/components/schemas/InsightInfo'
+        accountName:
+          type: string
+        investigationName:
+          type: string
+        investigationType:
+          type: string
+        investigationStatus:
+          type: string
+        investigationSource:
+          type: string
+        investigationPriority:
+          type: string
+        investigationSeverity:
+          type: string
+        investigationCategory:
+          type: string
+        investigationSubCategory:
+          type: string
+        investigationOwner:
+          type: string
+        investigationAssignee:
+          type: string
+        investigationDescription:
+          type: string
+        investigationResolution:
+          type: string
+        investigationResolutionDate:
+          type: string
+          format: date-time
+        investigationClosed:
+          type: boolean
+        investigationClosedDate:
+          type: string
+          format: date-time
+        investigationTags:
+          type: array
+          items:
+            type: string
+        investigationNotes:
+          type: string
+        investigationAttachments:
+          type: array
+          items:
+            type: string
+        investigationRelatedInvestigations:
+          type: array
+          items:
+            type: string
+        investigationCustomFields:
+          type: object
+        investigationCreatedDate:
+          type: string
+          format: date-time
+        investigationUpdatedDate:
+          type: string
+          format: date-time
+        investigationDeleted:
+          type: boolean
+        investigationDeletedDate:
+          type: string
+          format: date-time
+    ForensicInfoJson:
+      type: object
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        investigationId:
+          type: string
+        timeStartAnalysis:
+          type: string
+          format: date-time
+        timeEndAnalysis:
+          type: string
+          format: date-time
+        status:
+          type: string
+        source:
+          type: string
+        createdBy:
+          type: string
+        createdDate:
+          type: string
+          format: date-time
+        updatedBy:
+          type: string
+        updatedDate:
+          type: string
+          format: date-time
+        deleted:
+          type: boolean
+        insights:
+          type: array
+          items:
+            $ref: '#/components/schemas/InsightInfo'
+        accountName:
+          type: string
+        investigationName:
+          type: string
+        investigationType:
+          type: string
+        investigationStatus:
+          type: string
+        investigationSource:
+          type: string
+        investigationPriority:
+          type: string
+        investigationSeverity:
+          type: string
+        investigationCategory:
+          type: string
+        investigationSubCategory:
+          type: string
+        investigationOwner:
+          type: string
+        investigationAssignee:
+          type: string
+        investigationDescription:
+          type: string
+        investigationResolution:
+          type: string
+        investigationResolutionDate:
+          type: string
+          format: date-time
+        investigationClosed:
+          type: boolean
+        investigationClosedDate:
+          type: string
+          format: date-time
+        investigationTags:
+          type: array
+          items:
+            type: string
+        investigationNotes:
+          type: string
+        investigationAttachments:
+          type: array
+          items:
+            type: string
+        investigationRelatedInvestigations:
+          type: array
+          items:
+            type: string
+        investigationCustomFields:
+          type: object
+        investigationCreatedDate:
+          type: string
+          format: date-time
+        investigationUpdatedDate:
+          type: string
+          format: date-time
+        investigationDeleted:
+          type: boolean
+        investigationDeletedDate:
+          type: string
+          format: date-time
+    ForensicInfoQueryRequest:
+      type: object
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        sort:
+          type: array
+          items:
+            type: string
+        query:
+          type: string
+    SearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+        search:
+          type: string
+        filters:
+          type: object
+    InsightInfo:
+      type: object
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        investigationId:
+          type: string
+        generatedTime:
+          type: string
+          format: date-time
+        type:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        ruleName:
+          type: string
+        ruleVersion:
+          type: string
+        intention:
+          type: string
+        suspicious:
+          type: boolean
+        informational:
+          type: boolean
+        ioc:
+          type: boolean
+        location:
+          type: string
+        deviceOwnerName:
+          type: string
+        policyTriggerInfo:
+          type: string
+        relatedInvestigations:
+          type: string
+        originalInsightTime:
+          type: string
+          format: date-time
+        sourceFileName:
+          type: string
+        attributeInformation:
+          type: object
+        _customAll:
+          type: string
+        insightId:
+          type: string
+        accountName:
+          type: string
+        investigationName:
+          type: string
+        investigationType:
+          type: string
+        investigationStatus:
+          type: string
+        investigationSource:
+          type: string
+        investigationPriority:
+          type: string
+        investigationSeverity:
+          type: string
+        investigationCategory:
+          type: string
+        investigationSubCategory:
+          type: string
+        investigationOwner:
+          type: string
+        investigationAssignee:
+          type: string
+        investigationDescription:
+          type: string
+        investigationResolution:
+          type: string
+        investigationResolutionDate:
+          type: string
+          format: date-time
+        investigationClosed:
+          type: boolean
+        investigationClosedDate:
+          type: string
+          format: date-time
+        investigationTags:
+          type: array
+          items:
+            type: string
+        investigationNotes:
+          type: string
+        investigationAttachments:
+          type: array
+          items:
+            type: string
+        investigationRelatedInvestigations:
+          type: array
+          items:
+            type: string
+        investigationCustomFields:
+          type: object
+        investigationCreatedDate:
+          type: string
+          format: date-time
+        investigationUpdatedDate:
+          type: string
+          format: date-time
+        investigationDeleted:
+          type: boolean
+        investigationDeletedDate:
+          type: string
+          format: date-time

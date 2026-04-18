@@ -1,0 +1,57 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.3.4'
+    id 'io.spring.dependency-management' version '1.1.6'
+}
+
+group = 'org.example'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-elasticsearch'
+
+    // JPA and PostgreSQL for migration controller
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    runtimeOnly 'org.postgresql:postgresql:42.7.4'
+
+    // OpenAPI/Swagger UI (springdoc)
+    //implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.5.0'
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.1.0'
+
+
+    // OpenSearch Java client
+    implementation 'org.opensearch.client:opensearch-java:2.14.0'
+    implementation 'org.opensearch.client:opensearch-rest-client:2.14.0'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    implementation 'org.projectlombok:lombok:1.18.38'
+    // opensearch
+    implementation("org.opensearch.client:spring-data-opensearch-starter:1.5.4") {
+        exclude(group: "org.opensearch.client", module: "opensearch-rest-client-sniffer")
+    }
+    implementation("org.springframework.data:spring-data-elasticsearch:5.3.8")
+
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+
+    //MapSructs
+    def mapstructVersion = "1.5.5.Final"
+    implementation("org.mapstruct:mapstruct:${mapstructVersion}")
+    annotationProcessor("org.mapstruct:mapstruct-processor:${mapstructVersion}")
+    testAnnotationProcessor("org.mapstruct:mapstruct-processor:${mapstructVersion}")
+
+    //rsql
+    implementation 'cz.jirutka.rsql:rsql-parser:2.1.0'
+    //implementation 'com.github.perplexhub:rsql-jpa-specification:6.0.0'
+    //implementation("com.zimperium.server.lib:lib-rsql-spring-jpa:1.1.0")
+
+}
+
+test {
+    useJUnitPlatform()
+}

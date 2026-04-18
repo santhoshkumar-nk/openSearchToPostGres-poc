@@ -1,0 +1,924 @@
+openapi: 3.0.3
+info:
+  title: Zimperium License Management API
+  description: >
+    REST API for managing licenses, seat usage, group allocations, lifecycle operations,
+    audit trails, and notifications for the Zimperium Investigations Platform.
+  version: 1.0.0
+  contact:
+    name: Zimperium Platform Team
+    email: platform-eng@zimperium.com
+
+servers:
+  - url: https://api.zimperium.com
+    description: Production
+  - url: https://api-staging.zimperium.com
+    description: Staging
+
+tags:
+  - name: License CRUD
+    description: Create, read, update, and delete license records
+  - name: License Status & Summary
+    description: Dashboard KPI and status banner APIs
+  - name: Seat & Usage Management
+    description: Seat consumption, release, and trend analytics
+  - name: Group Allocation
+    description: Allocate and manage seat quotas per group
+  - name: Renewal & Lifecycle
+    description: License renewal, grace period, suspension, and reactivation
+  - name: Audit & History
+    description: Full audit trail for license and org-level actions
+  - name: Notifications & Alerts
+    description: Fetch and configure license alert notifications
+
+paths:
+
+  # ──────────────────────────────────────────────────────────────
+  # GROUP 1 — License CRUD
+  # ──────────────────────────────────────────────────────────────
+
+  /api/v1/licenses:
+    get:
+      tags: [License CRUD]
+      summary: Fetch all licenses
+      description: Returns all licenses for the authenticated org/tenant with optional filters and pagination.
+      operationId: getAllLicenses
+      parameters:
+        - name: status
+          in: query
+          description: Filter by license status
+          required: false
+          schema:
+            $ref: '#/components/schemas/LicenseStatus'
+        - name: licenseType
+          in: query
+          description: Filter by license type
+          required: false
+          schema:
+            $ref: '#/components/schemas/LicenseType'
+        - name: page
+          in: query
+          description: Page number (0-indexed)
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          description: Number of records per page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: List of licenses returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseListResponse'
+              example:
+                totalLicenses: 3
+                licenses:
+                  - licenseId: uuid-001
+                    licenseKey: MTD-INV-2024-XXXX
+                    licenseType: INVESTIGATION
+                    totalSeats: 1500
+                    usedSeats: 1102
+                    availableSeats: 398
+                    status: EXPIRED
+                    expiresOn: 2025-09-24
+                    daysUntilExpiry: -149
+                    orgId: zimperium-org-1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+        - BearerAuth: []
+
+    post:
+      tags: [License CRUD]
+      summary: Create / provision a new license
+      operationId: createLicense
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLicenseRequest'
+            example:
+              orgId: zimperium-org-1
+              licenseType: INVESTIGATION
+              totalSeats: 2000
+              purchasedOn: 2026-02-20
+              expiresOn: 2027-02-20
+              gracePeriodDays: 15
+              licenseKey: MTD-INV-2026-ABCD
+      responses:
+        '201':
+          description: License created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/License'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: License key already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - BearerAuth: []
+
+  /api/v1/licenses/{licenseId}:
+    get:
+      tags: [License CRUD]
+      summary: Fetch full details of a single license
+      description: >
+        Returns all base fields plus groupAllocations[], usagePercentage,
+        and gracePeriodEndsOn if the license is in a grace period.
+      operationId: getLicenseById
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      responses:
+        '200':
+          description: License detail returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseDetail'
+              example:
+                licenseId: uuid-001
+                licenseKey: MTD-INV-2024-XXXX
+                licenseType: INVESTIGATION
+                totalSeats: 1500
+                usedSeats: 1102
+                availableSeats: 398
+                status: EXPIRED
+                expiresOn: 2025-09-24
+                daysUntilExpiry: -149
+                orgId: zimperium-org-1
+                groupAllocations:
+                  - groupId: g1
+                    groupName: C-Suite APAC
+                    allocatedSeats: 300
+                    usedSeats: 280
+                  - groupId: g2
+                    groupName: HR
+                    allocatedSeats: 200
+                    usedSeats: 210
+                usagePercentage: 73.5
+                gracePeriodEndsOn: 2025-10-09
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      security:
+        - BearerAuth: []
+
+    put:
+      tags: [License CRUD]
+      summary: Update license details
+      description: >
+        Update any mutable fields — extend expiry, upgrade seat count, or change status.
+        Use cases: Renew (expiresOn, renewedOn), Upgrade seats (totalSeats), Suspend (status).
+      operationId: updateLicense
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLicenseRequest'
+      responses:
+        '200':
+          description: License updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/License'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      security:
+        - BearerAuth: []
+
+    delete:
+      tags: [License CRUD]
+      summary: Soft-delete / deactivate a license
+      description: >
+        Sets the license status to SUSPENDED. Hard delete is restricted to super-admin roles.
+      operationId: deleteLicense
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      responses:
+        '200':
+          description: License deactivated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      security:
+        - BearerAuth: []
+
+  # ──────────────────────────────────────────────────────────────
+  # GROUP 2 — License Status & Summary (Dashboard APIs)
+  # ──────────────────────────────────────────────────────────────
+
+  /api/v1/licenses/summary:
+    get:
+      tags: [License Status & Summary]
+      summary: License KPI summary for the dashboard
+      description: >
+        Primary API for the Dashboard KPI tile. Returns aggregated seat usage,
+        license counts by status, and nearest expiry information for the authenticated org.
+      operationId: getLicenseSummary
+      responses:
+        '200':
+          description: Summary returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseSummary'
+              example:
+                orgId: zimperium-org-1
+                totalLicenses: 3
+                totalSeats: 1500
+                usedSeats: 1102
+                availableSeats: 398
+                usagePercentage: 73.5
+                activeLicenses: 1
+                expiredLicenses: 1
+                expiringSoonLicenses: 0
+                nearestExpiryDate: 2025-09-24
+                nearestExpiryStatus: EXPIRED
+                renewalRequired: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+        - BearerAuth: []
+
+  /api/v1/licenses/status:
+    get:
+      tags: [License Status & Summary]
+      summary: License overall status check
+      description: >
+        Returns a simplified status object suitable for header-level warning banners.
+      operationId: getLicenseStatus
+      responses:
+        '200':
+          description: Status returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseStatusResponse'
+              example:
+                overallStatus: EXPIRED
+                message: Your license expired on 24-Sep-2025. Investigations may be blocked.
+                actionRequired: true
+                ctaLabel: Renew License
+                ctaUrl: /licenses/renew
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+        - BearerAuth: []
+
+  /api/v1/licenses/expiry-alerts:
+    get:
+      tags: [License Status & Summary]
+      summary: Get expiry alerts
+      description: >
+        Returns all licenses that are expired or expiring within the configurable
+        threshold window (default 30 days).
+      operationId: getExpiryAlerts
+      parameters:
+        - name: daysThreshold
+          in: query
+          description: Number of days ahead to check for expiring licenses
+          required: false
+          schema:
+            type: integer
+            default: 30
+            minimum: 1
+      responses:
+        '200':
+          description: Expiry alerts returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpiryAlertListResponse'
+              example:
+                alerts:
+                  - licenseId: uuid-001
+                    licenseKey: MTD-INV-2024-XXXX
+                    expiresOn: 2025-09-24
+                    status: EXPIRED
+                    severity: CRITICAL
+                    daysOverdue: 149
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      security:
+        - BearerAuth: []
+
+  # ──────────────────────────────────────────────────────────────
+  # GROUP 3 — Seat / Usage Management
+  # ──────────────────────────────────────────────────────────────
+
+  /api/v1/licenses/{licenseId}/usage:
+    get:
+      tags: [Seat & Usage Management]
+      summary: Detailed seat usage breakdown
+      description: >
+        Returns who is consuming seats, broken down by trigger type and by group.
+        Feeds the "License Usage by Group" panel on the dashboard.
+      operationId: getLicenseUsage
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      responses:
+        '200':
+          description: Usage breakdown returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseUsage'
+              example:
+                licenseId: uuid-001
+                totalSeats: 1500
+                usedSeats: 1102
+                usageByTriggerType:
+                  AUTO_THREAT: 420
+                  MANUAL: 310
+                  SCHEDULED: 280
+                  AUTO_GEO: 92
+                usageByGroup:
+                  - groupName: C-Suite APAC
+                    usedSeats: 280
+                  - groupName: HR
+                    usedSeats: 210
+                  - groupName: Core Dev Leaders
+                    usedSeats: 190
+                lastUpdated: 2026-02-20T12:00:00Z
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      security:
+        - BearerAuth: []
+
+  /api/v1/licenses/{licenseId}/consume:
+    post:
+      tags: [Seat & Usage Management]
+      summary: Consume a seat (internal)
+      description: >
+        Called internally by the Investigation Service when a new investigation is triggered.
+        Decrements available seats.
+        - Returns HTTP 402 (LICENSE_EXHAUSTED) if availableSeats == 0.
+        - Returns HTTP 403 (LICENSE_EXPIRED) if the license is expired.
+        - Sets warningThresholdReached: true and publishes a Kafka event if remaining seats < 10%.
+      operationId: consumeSeat
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsumeRequest'
+            example:
+              investigationId: INV-1234
+              triggerType: AUTO_THREAT
+              groupId: group-csuite-apac
+              consumedBy: system
+      responses:
+        '200':
+          description: Seat consumed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsumeResponse'
+              example:
+                success: true
+                remainingSeats: 397
+                warningThresholdReached: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: License seats exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                errorCode: "LICENSE_EXHAUSTED"
+                message: "No available seats. Please upgrade your license."
+        '403':
+          description: License is expired or access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                errorCode: "LICENSE_EXPIRED"
+                message: "Your license has expired. Investigations are blocked."
+        '404':
+          $ref: '#/components/responses/NotFound'
+      security:
+        - BearerAuth: []
+
+  /api/v1/licenses/{licenseId}/release:
+    post:
+      tags: [Seat & Usage Management]
+      summary: Release a consumed seat
+      description: >
+        Called when an investigation is closed or resolved. Frees up the associated seat.
+      operationId: releaseSeat
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+            example:
+              investigationId: INV-1234
+              releasedBy: brian.peck@zimperium.com
+      responses:
+        '200':
+          description: Seat released successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/licenses/{licenseId}/usage/trend:
+    get:
+      tags: [Seat & Usage Management]
+      summary: Seat usage trend over time
+      description: >
+        Returns the trend of seat usage over time, aggregated by month.
+        Feeds the "License Usage Trend" panel on the dashboard.
+      operationId: getUsageTrend
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      responses:
+        '200':
+          description: Trend data returned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                period: 6M
+                dataPoints:
+                  - month: Jan
+                    usedSeats: 880
+                  - month: Feb
+                    usedSeats: 940
+                  - month: Mar
+                    usedSeats: 1020
+                  - month: Apr
+                    usedSeats: 1080
+                  - month: May
+                    usedSeats: 1095
+                  - month: Jun
+                    usedSeats: 1102
+  /api/v1/licenses/{licenseId}/allocations:
+    get:
+      tags: [Group Allocation]
+      summary: Get group allocations for a license
+      description: >
+        Returns the list of groups and their allocated/used seat counts for the specified license.
+        Supports pagination.
+      operationId: getAllocations
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+        - name: page
+          in: query
+          description: Page number (0-indexed)
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          description: Number of records per page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
+      responses:
+        '200':
+          description: Allocations returned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                allocations:
+                  - groupId: g1
+                    groupName: C-Suite APAC
+                    allocatedSeats: 300
+                    usedSeats: 280
+                  - groupId: g2
+                    groupName: HR
+                    allocatedSeats: 200
+                    usedSeats: 210
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/licenses/{licenseId}/allocations/{groupId}:
+    put:
+      tags: [Group Allocation]
+      summary: Update seat allocation for a group
+      description: >
+        Update the number of allocated seats for a specific group under the given license.
+        Reduces or increases the quota for the group.
+      operationId: updateGroupAllocation
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+        - $ref: '#/components/parameters/groupId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              allocatedSeats: 250
+      responses:
+        '200':
+          description: Allocation updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                groupId: g1
+                allocatedSeats: 250
+                usedSeats: 240
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/licenses/{licenseId}/allocations/bulk:
+    post:
+      tags: [Group Allocation]
+      summary: Bulk update group seat allocations
+      description: >
+        Update seat allocations for multiple groups in a single request.
+        Useful for adjusting quotas after a license upgrade.
+      operationId: bulkUpdateGroupAllocations
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              allocations:
+                - groupId: g1
+                  allocatedSeats: 350
+                - groupId: g2
+                  allocatedSeats: 220
+      responses:
+        '200':
+          description: Bulk update successful
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                updatedGroups:
+                  - groupId: g1
+                    newAllocatedSeats: 350
+                  - groupId: g2
+                    newAllocatedSeats: 220
+  /api/v1/licenses/{licenseId}/renew:
+    post:
+      tags: [Renewal & Lifecycle]
+      summary: Renew a license
+      description: >
+        Renew an existing license, extending its expiry date and optionally increasing seat count.
+        Triggers a new license key issuance.
+      operationId: renewLicense
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              newExpiryDate: 2027-02-20
+              additionalSeats: 500
+              renewedBy: admin@zimperium.com
+              renewalOrderId: ORD-20260220-001
+      responses:
+        '200':
+          description: License renewed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                licenseId: uuid-001
+                previousExpiryDate: 2025-09-24
+                newExpiryDate: 2027-02-20
+                previousTotalSeats: 1500
+                newTotalSeats: 2000
+                status: ACTIVE
+                renewedOn: 2026-02-20
+  /api/v1/licenses/{licenseId}/audit:
+    get:
+      tags: [Audit & History]
+      summary: Get license audit logs
+      description: >
+        Returns the audit trail for all changes made to the specified license.
+        Includes creation, updates, seat consumption, and expiration events.
+      operationId: getAuditLogs
+      parameters:
+        - $ref: '#/components/parameters/licenseId'
+      responses:
+        '200':
+          description: Audit logs returned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                auditLogs:
+                  - action: CREATED
+                    performedBy: admin@zimperium.com
+                    timestamp: 2024-09-24T00:00:00Z
+                    metadata:
+                      initialSeats: 1500
+                  - action: SEAT_CONSUMED
+                    performedBy: system
+                    timestamp: 2024-10-01T08:30:00Z
+                    metadata:
+                      investigationId: INV-1234
+                      triggerType: AUTO_THREAT
+                  - action: EXPIRED
+                    performedBy: system
+                    timestamp: 2025-09-25T00:00:00Z
+                    metadata: {}
+  /api/v1/licenses/notifications:
+    get:
+      tags: [Notifications & Alerts]
+      summary: Get license notifications
+      description: >
+        Returns the list of notifications related to license status, expiry, and usage.
+        Includes alerts for expired licenses and low seat availability.
+      operationId: getNotifications
+      responses:
+        '200':
+          description: Notifications returned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                notifications:
+                  - type: LICENSE_EXPIRED
+                    severity: CRITICAL
+                    message: License MTD-INV-2024-XXXX expired on 24-Sep-2025
+                    actionUrl: /licenses/uuid-001/renew
+                    createdAt: 2025-09-25T00:00:00Z
+                    read: false
+                  - type: SEAT_THRESHOLD_WARNING
+                    severity: HIGH
+                    message: License usage at 73% — 398 seats remaining
+                    actionUrl: /licenses/uuid-001
+                    createdAt: 2026-02-20T12:00:00Z
+                    read: false
+  /api/v1/licenses/notifications/configure:
+    post:
+      tags: [Notifications & Alerts]
+      summary: Configure license notifications
+      description: >
+        Set up or update the notification preferences for license alerts.
+        Defines thresholds for expiry warnings and seat usage alerts.
+      operationId: configureNotifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              expiryWarningDays: [90, 30, 7]
+              seatUsageThresholds: [75, 90, 95]
+              notifyEmails:
+                - admin@zimperium.com
+                - security@zimperium.com
+              enableKafkaEvents: true
+              enableEmailAlerts: true
+      responses:
+        '200':
+          description: Notifications configured successfully
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                message: Notifications settings updated.
+                expiryWarningDays: [90, 30, 7]
+                seatUsageThresholds: [75, 90, 95]
+                notifyEmails:
+                  - admin@zimperium.com
+                  - security@zimperium.com
+                enableKafkaEvents: true
+                enableEmailAlerts: true
+components:
+  schemas:
+    LicenseStatus:
+      type: string
+      enum: [ACTIVE, EXPIRED, SUSPENDED]
+    LicenseType:
+      type: string
+      enum: [TRIAL, FULL, ENTERPRISE]
+    LicenseListResponse:
+      type: object
+      properties:
+        licenses:
+          type: array
+          items:
+            $ref: '#/components/schemas/License'
+    License:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/LicenseStatus'
+        type:
+          $ref: '#/components/schemas/LicenseType'
+    CreateLicenseRequest:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/LicenseType'
+        status:
+          $ref: '#/components/schemas/LicenseStatus'
+    UpdateLicenseRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/LicenseStatus'
+        type:
+          $ref: '#/components/schemas/LicenseType'
+    LicenseDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/LicenseStatus'
+        type:
+          $ref: '#/components/schemas/LicenseType'
+    LicenseSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/LicenseStatus'
+        type:
+          $ref: '#/components/schemas/LicenseType'
+    LicenseStatusResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/LicenseStatus'
+    ExpiryAlertListResponse:
+      type: object
+      properties:
+        alerts:
+          type: array
+          items:
+            type: string
+    LicenseUsage:
+      type: object
+      properties:
+        id:
+          type: string
+        usage:
+          type: integer
+    ConsumeRequest:
+      type: object
+      properties:
+        licenseId:
+          type: string
+        amount:
+          type: integer
+    ConsumeResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+    ReleaseRequest:
+      type: object
+      properties:
+        licenseId:
+          type: string
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  parameters:
+    licenseId:
+      name: licenseId
+      in: path
+      required: true
+      schema:
+        type: string
+    groupId:
+      name: groupId
+      in: path
+      required: true
+      schema:
+        type: string

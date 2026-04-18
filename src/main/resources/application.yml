@@ -1,0 +1,39 @@
+#
+#opensearch:
+#  uris: ${spring.elasticsearch.rest.uris}
+#  username: ${spring.elasticsearch.rest.username:}
+#  password: ${spring.elasticsearch.rest.password:}
+#  socket-timeout: ${spring.elasticsearch.rest.read-timeout:60000}
+#  connection-timeout: ${spring.elasticsearch.rest.connection-timeout:60000}
+#
+#  datasource:
+#    url: "jdbc:postgresql://localhost:5432/zimperium"
+
+#spring:
+#  application:
+#    name: test
+#    schema-name: test
+#
+#  boot.admin.client:
+#    url: "http://admin:8080"
+#    auto-deregistration: true
+#
+#  datasource:
+#    url: "jdbc:postgresql://docker:5432/zimperium"
+#    username: "zimperium"
+#    password: "Zimperium!!1"
+#    hikari:
+#      maximum-pool-size: 10
+#      minimum-idle: 2
+#      data-source-properties:
+#        # identifies which service a given connection is for (see org.postgresql.PGProperty#APPLICATION_NAME)
+#        ApplicationName: "${spring.application.name}"
+#        # jdbc level default schema/search_path setting (see org.postgresql.PGProperty#CURRENT_SCHEMA)
+#        currentSchema: "${spring.application.schema-name}"
+
+logging:
+  # enables spring admin's logfile endpoint
+  file:
+    path: /tmp
+  level:
+    tracer: TRACE
