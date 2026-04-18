@@ -11,7 +11,7 @@
 2. [Why Do We Need Them?](#2-why-do-we-need-them)
 3. [How Materialized Views Work in This Project](#3-how-materialized-views-work-in-this-project)
 4. [The Three Aggregation Approaches — Compared](#4-the-three-aggregation-approaches--compared)
-   - [statsByOpenSearchAggregate (stats)](#41-statsbyopensearchaggregate-stats)
+   - [statsByPostgresAggregate (stats)](#41-statsbypostgresaggregate-stats)
    - [statsByJavaAggregation](#42-statsbyjavaaggregation)
    - [statsByPostGresMaterializedViews](#43-statsbypostgresmaterializedviews)
 5. [Architecture Diagram](#5-architecture-diagram)
@@ -19,6 +19,10 @@
 7. [Performance Comparison](#7-performance-comparison)
 8. [When to Use Which Approach](#8-when-to-use-which-approach)
 9. [Trade-offs](#9-trade-offs)
+10. [Alternative PostgreSQL Approaches (Beyond Materialized Views)](#10-alternative-postgresql-approaches-beyond-materialized-views)
+    - [Trigger-Based Summary Tables](#101-trigger-based-summary-tables-real-time-zero-staleness)
+    - [GROUPING SETS / CUBE / ROLLUP](#102-grouping-sets--cube--rollup-single-query-multi-aggregation)
+    - [TimescaleDB Continuous Aggregates](#103-timescaledb-continuous-aggregates-automatic-incremental-refresh)
 
 ---
 
@@ -181,23 +185,26 @@ This project implements **three different approaches** to compute the same aggre
 
 ---
 
-### 4.1 statsByOpenSearchAggregate (`/stats`)
+### 4.1 statsByPostgresAggregate (`/stats`)
 
 > **API:** `GET /migration/opensearch-to-postgres/stats`  
 > **Time:** 16 ms (old) → **14 ms** (new)  
-> **Approach:** Delegate aggregation to OpenSearch (the original data source)
+> **Approach:** PostgreSQL CTE-based aggregation — single SQL query with `WITH ... UNION ALL` on the live `insights_info` table
+
+> ⚠️ **Note:** Despite the project name referencing "OpenSearch", this endpoint does **NOT** call OpenSearch. It runs a native PostgreSQL query using Common Table Expressions (CTEs) to compute all 3 aggregations in a single database round-trip.
 
 #### How It Works
 
 ```
-Client → Controller → Service → Repository → OpenSearch (native aggregation DSL)
+Client → Controller → Service → Repository → PostgreSQL (native CTE query)
                                                     ↓
-                                              OpenSearch computes:
-                                              • date_histogram
-                                              • type_counts
-                                              • category_counts
+                                              PostgreSQL computes via CTE:
+                                              • date_histogram (generate_series + LEFT JOIN)
+                                              • type_counts (GROUP BY type)
+                                              • category_counts (GROUP BY category)
+                                              All combined via UNION ALL
                                                     ↓
-                                              Returns JSON result
+                                              Returns result rows
                                                     ↓
                                            Map to AggregationRoot POJO
                                                     ↓
@@ -206,27 +213,27 @@ Client → Controller → Service → Repository → OpenSearch (native aggregat
 
 #### What Happens Under the Hood
 
-1. The repository builds an **OpenSearch aggregation query** using OpenSearch's native DSL
-2. OpenSearch executes the aggregation **server-side** — no data leaves OpenSearch
-3. The result is a pre-structured JSON with buckets, counts, and histograms
-4. Java simply maps the JSON to the `AggregationRoot` POJO
+1. The repository builds a **native SQL CTE query** with `WITH periods AS ... date_histogram AS ... type_counts AS ... category_counts AS ...`
+2. PostgreSQL executes all 3 aggregations **server-side** in a single query using `UNION ALL`
+3. `generate_series()` creates the date periods, `LEFT JOIN` fills zero-count days
+4. Java maps the flat result rows to the `AggregationRoot` POJO
 
 #### Key Characteristics
 
 | Aspect | Detail |
 |--------|--------|
-| **Data Source** | OpenSearch |
-| **Aggregation Engine** | OpenSearch (server-side) |
-| **PostgreSQL Involved?** | ❌ No |
-| **Table Scans** | N/A (OpenSearch handles internally) |
-| **DB Round-Trips** | 0 to PostgreSQL, 1 to OpenSearch |
-| **Data Freshness** | Real-time (queries live OpenSearch index) |
-| **Java Processing** | Minimal — just JSON mapping |
+| **Data Source** | PostgreSQL (`insights_info` table) |
+| **Aggregation Engine** | PostgreSQL (server-side CTE + UNION ALL) |
+| **OpenSearch Involved?** | ❌ No |
+| **Table Scans** | Filtered by account_id, forensic_info_id, time range (uses indexes) |
+| **DB Round-Trips** | 2 (1 for time bounds + 1 for CTE aggregation) |
+| **Data Freshness** | Real-time (queries live table) |
+| **Java Processing** | Minimal — just row mapping |
 
 #### When to Use
-- When data **still lives in OpenSearch** (pre-migration or hybrid mode)
-- When you need **real-time** results from the source of truth
-- When OpenSearch cluster is available and responsive
+- When you need **real-time** aggregation results from PostgreSQL
+- When you want **all 3 aggregations in a single SQL query** (no Java loops)
+- As the **default approach** post-migration from OpenSearch
 
 ---
 
@@ -369,9 +376,9 @@ flowchart TD
         C[ForensicInfoMigrationService]
     end
 
-    subgraph "Approach 1: OpenSearch Aggregate"
+    subgraph "Approach 1: PostgreSQL CTE Aggregate"
         D1[CustomizedInsightsRepository]
-        E1[OpenSearch Cluster]
+        E1[insights_info table — CTE query]
     end
 
     subgraph "Approach 2: Java Aggregation"
@@ -418,20 +425,20 @@ flowchart TD
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                              DATA FLOW PER API CALL                                     │
 ├──────────────────────────────┬──────────────────────────────┬────────────────────────────┤
-│   statsByOpenSearchAggregate │     statsByJavaAggregation   │ statsByPostGresMVs         │
+│ statsByPostgresAggregate  │     statsByJavaAggregation   │ statsByPostGresMVs         │
 ├──────────────────────────────┼──────────────────────────────┼────────────────────────────┤
 │                              │                              │                            │
 │  API Request                 │  API Request                 │  API Request               │
 │       │                      │       │                      │       │                    │
 │       ▼                      │       ▼                      │       ▼                    │
-│  OpenSearch DSL query        │  MIN/MAX time bounds query   │  MIN/MAX time bounds query │
+│  MIN/MAX time bounds query   │  MIN/MAX time bounds query   │  MIN/MAX time bounds query │
 │       │                      │       │                      │       │                    │
 │       ▼                      │       ▼                      │       ▼                    │
-│  OpenSearch computes         │  SELECT * FROM insights_info │  UNION ALL across 3 MVs    │
-│  aggregation server-side     │       │                      │  (pre-computed data)       │
+│  PostgreSQL CTE query        │  SELECT * FROM insights_info │  UNION ALL across 3 MVs    │
+│  (WITH ... UNION ALL)        │       │                      │  (pre-computed data)       │
 │       │                      │       ▼                      │       │                    │
 │       ▼                      │  Load N entities into JVM    │       ▼                    │
-│  Return JSON result          │       │                      │  Return aggregated rows    │
+│  Return aggregated rows      │       │                      │  Return aggregated rows    │
 │       │                      │       ▼                      │       │                    │
 │       ▼                      │  Single-pass loop:           │       ▼                    │
 │  Map to POJO                 │  compute 3 aggregations      │  Map to POJO              │
@@ -441,8 +448,8 @@ flowchart TD
 │                              │  (19ms)                      │                            │
 ├──────────────────────────────┼──────────────────────────────┼────────────────────────────┤
 │  Entities loaded: 0          │  Entities loaded: N          │  Entities loaded: 0        │
-│  Table scans: 0              │  Table scans: 0 (indexed)    │  Table scans: 0 (MVs)     │
-│  DB round-trips: 0 (PG)     │  DB round-trips: 2           │  DB round-trips: 1         │
+│  Table scans: 0 (indexed)    │  Table scans: 0 (indexed)    │  Table scans: 0 (MVs)     │
+│  DB round-trips: 2           │  DB round-trips: 2           │  DB round-trips: 1         │
 │  Java processing: minimal    │  Java processing: heavy      │  Java processing: minimal  │
 └──────────────────────────────┴──────────────────────────────┴────────────────────────────┘
 ```
@@ -455,7 +462,7 @@ flowchart TD
 
 | Endpoint | Old Code | New Code | Improvement |
 |----------|:--------:|:--------:|:-----------:|
-| statsByOpenSearchAggregate | 16 ms | **14 ms** | 🟢 -2 ms (12.5%) |
+| statsByPostgresAggregate | 16 ms | **14 ms** | 🟢 -2 ms (12.5%) |
 | statsByJavaAggregation | 19 ms | **19 ms** | 🟡 0 ms |
 | statsByPostGresMaterializedViews | 23 ms | **14 ms** | 🟢 -9 ms (39.1%) |
 
@@ -478,24 +485,24 @@ After optimization:
 ```mermaid
 xychart-beta
     title "Response Time — Old vs New (ms)"
-    x-axis ["OpenSearch Aggregate", "Java Aggregation", "Postgres MVs"]
+    x-axis ["Postgres CTE Aggregate", "Java Aggregation", "Postgres MVs"]
     y-axis "Time (ms)" 0 --> 30
     bar "Old" [16, 19, 23]
     bar "New" [14, 19, 14]
 ```
 
-> **Old times:** OpenSearch Aggregate: 16ms | Java Aggregation: 19ms | Postgres MVs: 23ms
-> **New times:** OpenSearch Aggregate: 14ms | Java Aggregation: 19ms | Postgres MVs: 14ms
+> **Old times:** Postgres CTE Aggregate: 16ms | Java Aggregation: 19ms | Postgres MVs: 23ms
+> **New times:** Postgres CTE Aggregate: 14ms | Java Aggregation: 19ms | Postgres MVs: 14ms
 
 ### Resource Usage Comparison
 
-| Metric | OpenSearch Aggregate | Java Aggregation | Materialized Views |
+| Metric | Postgres CTE Aggregate | Java Aggregation | Materialized Views |
 |--------|:-------------------:|:----------------:|:-----------------:|
 | **JVM Heap Usage** | Low | High (loads entities) | Low |
-| **PostgreSQL CPU** | None | Medium (query + index scan) | Low (read pre-computed) |
-| **OpenSearch CPU** | Medium | None | None |
-| **Network I/O** | 1 call to OpenSearch | 2 calls to PostgreSQL | 1 call to PostgreSQL |
-| **Scales with data?** | OpenSearch handles it | Degrades (more entities in heap) | Constant (MVs are small) |
+| **PostgreSQL CPU** | Medium (CTE query) | Medium (query + index scan) | Low (read pre-computed) |
+| **OpenSearch CPU** | None | None | None |
+| **Network I/O** | 2 calls to PostgreSQL | 2 calls to PostgreSQL | 1 call to PostgreSQL |
+| **Scales with data?** | Good (indexed) | Degrades (more entities in heap) | Constant (MVs are small) |
 
 ---
 
@@ -505,17 +512,17 @@ xychart-beta
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        DECISION MATRIX                                  │
 ├───────────────────────┬───────────┬─────────────┬───────────────────────┤
-│ Requirement           │ OpenSearch │ Java Agg    │ Materialized Views   │
+│ Requirement           │ PG CTE    │ Java Agg    │ Materialized Views   │
 │                       │ Aggregate │             │                      │
 ├───────────────────────┼───────────┼─────────────┼───────────────────────┤
-│ Real-time data        │ ✅ Best   │ ✅ Yes      │ ⚠️ Up to 5 min stale │
+│ Real-time data        │ ✅ Yes    │ ✅ Yes      │ ⚠️ Up to 5 min stale │
 │ Speed (low latency)   │ ✅ 14ms   │ ⚠️ 19ms    │ ✅ 14ms              │
 │ Large datasets        │ ✅ Yes    │ ❌ Slow     │ ✅ Yes               │
-│ No OpenSearch needed  │ ❌ No     │ ✅ Yes      │ ✅ Yes               │
+│ No OpenSearch needed  │ ✅ Yes    │ ✅ Yes      │ ✅ Yes               │
 │ No extra DB objects   │ ✅ Yes    │ ✅ Yes      │ ❌ Needs MVs+indexes │
 │ Custom Java logic     │ ❌ No     │ ✅ Yes      │ ❌ No                │
 │ Dashboard / KPI tiles │ ✅ Good   │ ⚠️ OK      │ ✅ Best              │
-│ Post-migration (no OS)│ ❌ N/A    │ ✅ Yes      │ ✅ Yes               │
+│ Post-migration (no OS)│ ✅ Yes    │ ✅ Yes      │ ✅ Yes               │
 └───────────────────────┴───────────┴─────────────┴───────────────────────┘
 ```
 
@@ -524,9 +531,9 @@ xychart-beta
 | Scenario | Recommended Approach | Reason |
 |----------|---------------------|--------|
 | **Dashboard KPIs & charts** | Materialized Views (14ms) | Speed + PostgreSQL-native, slight staleness is acceptable |
-| **Data still in OpenSearch** | OpenSearch Aggregate (14ms) | Query the source directly, no migration overhead |
+| **Real-time + single SQL query** | PostgreSQL CTE Aggregate (14ms) | Queries live table, no extra DB objects |
 | **Post-migration (no OpenSearch)** | Materialized Views (14ms) | Fastest PostgreSQL-only approach |
-| **Need exact real-time from PostgreSQL** | Java Aggregation (19ms) | Queries live table, no staleness |
+| **Need exact real-time from PostgreSQL** | PostgreSQL CTE Aggregate (14ms) | Queries live table, no staleness |
 | **Small dataset + custom logic** | Java Aggregation (19ms) | Flexible, no DB setup needed |
 | **High-concurrency dashboards** | Materialized Views (14ms) | MVs handle concurrent reads without load on source table |
 
@@ -545,14 +552,15 @@ xychart-beta
 | 1 DB round-trip (UNION ALL) | Additional storage for MV tables |
 | `readOnly` transaction — minimal overhead | Must manage refresh schedule |
 
-### OpenSearch Aggregate — Pros & Cons
+### PostgreSQL CTE Aggregate — Pros & Cons
 
 | ✅ Pros | ❌ Cons |
 |---------|--------|
-| Real-time data | Requires OpenSearch infrastructure |
-| OpenSearch optimized for aggregations | Not available post-migration |
-| No PostgreSQL load | Network dependency on OpenSearch cluster |
-| Minimal Java processing | Less control over aggregation logic |
+| Real-time data from live table | Slightly heavier on PostgreSQL CPU than MVs |
+| No extra DB objects needed | 2 DB round-trips (time bounds + CTE query) |
+| Single SQL query computes all 3 aggregations | Performance degrades with very large datasets |
+| No OpenSearch dependency | CTE complexity can be harder to debug |
+| Minimal Java processing | No pre-computation — recomputes every time |
 
 ### Java Aggregation — Pros & Cons
 
@@ -565,13 +573,235 @@ xychart-beta
 
 ---
 
+## 10. Alternative PostgreSQL Approaches (Beyond Materialized Views)
+
+Beyond the three approaches already implemented, there are additional PostgreSQL-native strategies that can match or beat OpenSearch aggregation performance — with **zero staleness** or **lower operational cost**.
+
+---
+
+### 10.1 Trigger-Based Summary Tables (Real-Time, Zero Staleness)
+
+> **Best for:** Real-time dashboards where 5-min staleness is unacceptable  
+> **Speed:** ~14ms (same as MVs)  
+> **Staleness:** ✅ **Zero** — updated on every INSERT/UPDATE/DELETE
+
+Unlike materialized views that require periodic `REFRESH`, summary tables are **incrementally updated in real-time** using database triggers.
+
+#### How It Works
+
+```
+INSERT INTO insights_info → Trigger fires → UPDATE summary table (increment count)
+DELETE FROM insights_info → Trigger fires → UPDATE summary table (decrement count)
+
+API Request → SELECT from summary table → Return instantly (no aggregation needed)
+```
+
+#### SQL Setup
+
+```sql
+-- 1. Create summary table
+CREATE TABLE insights_date_summary (
+    account_id       VARCHAR NOT NULL,
+    forensic_info_id VARCHAR NOT NULL,
+    period           DATE    NOT NULL,
+    type             VARCHAR,
+    category         VARCHAR,
+    doc_count        BIGINT  DEFAULT 0,
+    PRIMARY KEY (account_id, forensic_info_id, period, COALESCE(type,''), COALESCE(category,''))
+);
+
+-- 2. Create trigger function (incremental update)
+CREATE OR REPLACE FUNCTION fn_update_insights_summary()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO insights_date_summary (account_id, forensic_info_id, period, type, category, doc_count)
+        VALUES (NEW.account_id, NEW.forensic_info_id, DATE(NEW.original_insight_time), NEW.type, NEW.category, 1)
+        ON CONFLICT (account_id, forensic_info_id, period, COALESCE(type,''), COALESCE(category,''))
+        DO UPDATE SET doc_count = insights_date_summary.doc_count + 1;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE insights_date_summary
+        SET doc_count = doc_count - 1
+        WHERE account_id = OLD.account_id
+          AND forensic_info_id = OLD.forensic_info_id
+          AND period = DATE(OLD.original_insight_time)
+          AND type = OLD.type
+          AND category = OLD.category;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. Attach trigger
+CREATE TRIGGER trg_insights_summary
+AFTER INSERT OR DELETE ON insights_info
+FOR EACH ROW EXECUTE FUNCTION fn_update_insights_summary();
+```
+
+#### Query at API Time
+
+```sql
+-- All 3 aggregations in a single query from the summary table
+SELECT period, type, category, SUM(doc_count) AS doc_count
+FROM insights_date_summary
+WHERE account_id = :accountId
+  AND forensic_info_id = :investigationId
+  AND period BETWEEN :after AND :before
+GROUP BY period, type, category;
+```
+
+#### Comparison with Materialized Views
+
+```
+┌──────────────────────────┬─────────────────────┬──────────────────────────┐
+│                          │ Materialized Views   │ Trigger Summary Tables   │
+├──────────────────────────┼─────────────────────┼──────────────────────────┤
+│ Staleness                │ Up to 5 min          │ Zero (real-time)         │
+│ Read speed               │ ~14ms                │ ~14ms                    │
+│ Write overhead           │ None on INSERT       │ Small (trigger per row)  │
+│ Refresh needed?          │ Yes (scheduled)      │ No                       │
+│ Storage                  │ Full snapshot         │ Compact (aggregated)     │
+│ Complexity               │ Low                  │ Medium (trigger logic)   │
+│ Handles DELETE/UPDATE?   │ Yes (on refresh)     │ Yes (trigger handles it) │
+└──────────────────────────┴─────────────────────┴──────────────────────────┘
+```
+
+---
+
+### 10.2 GROUPING SETS / CUBE / ROLLUP (Single-Query Multi-Aggregation)
+
+> **Best for:** Computing all aggregation dimensions in **one SQL pass**  
+> **Speed:** ~15–17ms  
+> **Staleness:** ✅ Zero — queries live table
+
+PostgreSQL's `GROUPING SETS` lets you compute **multiple GROUP BY dimensions** in a single query — eliminating the need for `UNION ALL` or multiple queries.
+
+#### SQL Example
+
+```sql
+SELECT
+    CASE WHEN GROUPING(period) = 0 AND GROUPING(type) = 1 AND GROUPING(category) = 1
+         THEN 'date_histogram'
+         WHEN GROUPING(period) = 1 AND GROUPING(type) = 0 AND GROUPING(category) = 1
+         THEN 'type_counts'
+         WHEN GROUPING(period) = 1 AND GROUPING(type) = 1 AND GROUPING(category) = 0
+         THEN 'category_counts'
+    END AS agg_type,
+    to_char(original_insight_time, 'YYYY-MM-DD') AS period,
+    type,
+    category,
+    COUNT(*) AS doc_count
+FROM insights_info
+WHERE account_id = :accountId
+  AND forensic_info_id = :investigationId
+  AND original_insight_time BETWEEN :after AND :before
+GROUPING SETS (
+    (to_char(original_insight_time, 'YYYY-MM-DD')),  -- date histogram
+    (type),                                            -- type counts
+    (category)                                         -- category counts
+)
+ORDER BY agg_type, period;
+```
+
+**Key advantage:** PostgreSQL scans the table **once** and computes all 3 aggregations in a single pass — instead of 3 separate `GROUP BY` queries or `UNION ALL`.
+
+#### When to Use
+- When you want **real-time results** without MVs or triggers
+- When the table has **proper composite indexes** (makes the single scan fast)
+- When you want the **simplest approach** — no extra DB objects, no triggers, no refresh jobs
+
+---
+
+### 10.3 TimescaleDB Continuous Aggregates (Automatic, Incremental Refresh)
+
+> **Best for:** Time-series data with automatic, incremental MV refresh  
+> **Speed:** ~10–14ms  
+> **Staleness:** Configurable (can be near-zero)  
+> **Requires:** [TimescaleDB extension](https://www.timescale.com/) (free, open-source)
+
+TimescaleDB is a PostgreSQL extension purpose-built for time-series data. Its **continuous aggregates** are like materialized views but with **automatic incremental refresh** — only new/changed data is recomputed.
+
+#### Setup
+
+```sql
+-- 1. Convert insights_info into a hypertable (one-time)
+SELECT create_hypertable('insights_info', 'original_insight_time');
+
+-- 2. Create continuous aggregate (replaces your materialized view)
+CREATE MATERIALIZED VIEW ca_insights_daily
+WITH (timescaledb.continuous) AS
+SELECT
+    time_bucket('1 day', original_insight_time) AS period,
+    account_id,
+    forensic_info_id,
+    type,
+    category,
+    COUNT(*) AS doc_count
+FROM insights_info
+GROUP BY period, account_id, forensic_info_id, type, category;
+
+-- 3. Add automatic refresh policy (refresh last 1 hour of data every 5 min)
+SELECT add_continuous_aggregate_policy('ca_insights_daily',
+    start_offset    => INTERVAL '1 hour',
+    end_offset      => INTERVAL '1 minute',
+    schedule_interval => INTERVAL '5 minutes');
+```
+
+#### Why It's Better Than Plain Materialized Views
+
+```
+┌─────────────────────────────┬──────────────────────┬───────────────────────────┐
+│                             │ PostgreSQL MVs        │ TimescaleDB Cont. Aggs    │
+├─────────────────────────────┼──────────────────────┼───────────────────────────┤
+│ Refresh type                │ Full recompute        │ Incremental (only new)    │
+│ Refresh cost (10M rows)     │ Scans all 10M rows    │ Scans only new rows       │
+│ Automatic refresh?          │ No (need @Scheduled)  │ Yes (built-in policy)     │
+│ Concurrent refresh?         │ Needs UNIQUE index    │ Built-in                  │
+│ Time-series optimized?      │ No                    │ Yes (chunked storage)     │
+│ Compression?                │ No                    │ Yes (90%+ compression)    │
+│ Setup complexity            │ Medium                │ Low (one SQL command)     │
+└─────────────────────────────┴──────────────────────┴───────────────────────────┘
+```
+
+---
+
+### 10.4 Comparison — All Approaches
+
+```
+┌────────────────────────────────┬────────┬───────────┬──────────┬───────────┬──────────────┐
+│ Approach                       │ Speed  │ Staleness │ Write    │ Extra DB  │ Cost         │
+│                                │        │           │ Overhead │ Objects   │              │
+├────────────────────────────────┼────────┼───────────┼──────────┼───────────┼──────────────┤
+│ PostgreSQL CTE Aggregate       │ 14ms   │ Real-time │ None     │ None      │ $ (query)    │
+│ Java Aggregation               │ 19ms   │ Real-time │ None     │ None      │ $ (JVM heap) │
+│ Materialized Views             │ 14ms   │ ~5 min    │ None     │ 3 MVs     │ $ (refresh)  │
+│ Trigger Summary Tables  (NEW)  │ ~14ms  │ Real-time │ Small    │ 1 table   │ $ (trigger)  │
+│ GROUPING SETS            (NEW) │ ~16ms  │ Real-time │ None     │ None      │ $ (index)    │
+│ TimescaleDB Cont. Aggs   (NEW) │ ~12ms  │ ~1 min    │ None     │ 1 CA      │ $ (extension)│
+└────────────────────────────────┴────────┴───────────┴──────────┴───────────┴──────────────┘
+```
+
+### Recommendation
+
+| Scenario | Best Approach |
+|----------|--------------|
+| **Drop OpenSearch entirely, keep real-time** | Trigger Summary Tables |
+| **Drop OpenSearch, simplest migration** | GROUPING SETS (no extra DB objects) |
+| **Drop OpenSearch, large dataset + auto-refresh** | TimescaleDB Continuous Aggregates |
+| **Already using MVs, want zero staleness** | Migrate MVs → Trigger Summary Tables |
+| **Already using MVs, happy with ~5 min staleness** | Keep Materialized Views (current) |
+
+---
+
 ## Summary
 
 > **Materialized Views** are the optimal approach for this OpenSearch-to-PostgreSQL migration when the primary use case is **dashboard aggregation** (date histograms, type counts, category counts).
 >
 > They eliminate the need for OpenSearch while matching its performance (**14ms**), at the cost of data being up to **5 minutes stale** — a trade-off that is perfectly acceptable for dashboard visualizations.
 >
-> For use cases requiring **exact real-time data** from PostgreSQL, **Java Aggregation** (19ms) remains available as a fallback.
+> For use cases requiring **exact real-time data** from PostgreSQL, **PostgreSQL CTE Aggregate** (14ms) or **Java Aggregation** (19ms) remain available as fallbacks.
+>
+> ⚠️ **Note:** None of the stats endpoints in this project invoke OpenSearch. All aggregation is performed entirely within PostgreSQL. The `OpenSearchConfig.java` exists as a connection bean but is not used by any stats API.
 
 ---
 

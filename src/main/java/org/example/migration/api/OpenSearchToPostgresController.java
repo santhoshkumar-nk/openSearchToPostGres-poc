@@ -12,8 +12,6 @@ import org.example.migration.util.ConverterUtil;
 import org.example.migration.models.ForensicInfoJson;
 import org.example.migration.service.ForensicInfoMigrationService;
 import org.example.migration.util.QueryTermUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -21,7 +19,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -40,14 +37,12 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.example.migration.util.QueryTermUtils.combineFilterStrings;
-import static org.springframework.util.StringUtils.hasText;
 
 @Slf4j
 @RestController
 @RequiredArgsConstructor
 @RequestMapping(value = "/migration/opensearch-to-postgres", produces = MediaType.APPLICATION_JSON_VALUE)
 public class OpenSearchToPostgresController {
-    private static final Logger logger = LoggerFactory.getLogger(OpenSearchToPostgresController.class);
     private final ForensicInfoMigrationService migrationService;
 
     // Handles POST requests to create and migrate forensic info from OpenSearch to Postgres
@@ -55,16 +50,16 @@ public class OpenSearchToPostgresController {
     public ResponseEntity<ForensicInfoJson> createForensic(
             @RequestBody @Valid ForensicInfoDto forensicInfoDto) throws OpenSearchToPostgresException {
 
-        logger.info("Received request to migrate forensic info: {}", forensicInfoDto);
+        log.info("Received request to migrate forensic info: {}", forensicInfoDto);
 
         if (forensicInfoDto.getId() == null || forensicInfoDto.getId().isBlank()) {
             String generatedId = UUID.randomUUID().toString();
             forensicInfoDto.setId(generatedId);
-            logger.info("No ID provided. Generated new ID: {}", generatedId);
+            log.info("No ID provided. Generated new ID: {}", generatedId);
         }
         ForensicInfoJson forensicInfoJson = migrationService.saveForensicInfo(forensicInfoDto);
 
-        logger.info("Successfully migrated forensic info with ID: {}", forensicInfoJson.getId());
+        log.info("Successfully migrated forensic info with ID: {}", forensicInfoJson.getId());
         return ResponseEntity.created(URI.create("/migration/opensearch-to-postgres/" + forensicInfoJson.getId())).body(forensicInfoJson);
     }
 
@@ -77,7 +72,7 @@ public class OpenSearchToPostgresController {
             @RequestParam Map<String, String> terms,
             HttpServletRequest request) throws OpenSearchToPostgresException {
 
-        logger.info("Processing query POST {}?{}", request.getRequestURL(), request.getQueryString());
+        log.info("Processing query POST {}?{}", request.getRequestURL(), request.getQueryString());
         String accountId = lookupAccountId();
         Map<String, String> filteredTerms = filterTerms(terms);
 
@@ -110,7 +105,7 @@ public class OpenSearchToPostgresController {
         return migrationService.search(lookupAccountId(), before, after, pageable, mergedQueryTerms);
     }
 
-    // Handles GET requests to fetch statistics for forensic info
+    // Handles GET requests to fetch statistics using PostgreSQL CTE-based aggregation (single UNION ALL query on live table)
     @GetMapping("/stats")
     public ResponseEntity<AggregationRoot> stats(@RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
                         @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,

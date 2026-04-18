@@ -12,9 +12,9 @@ All three aggregation endpoints were benchmarked **before and after** applying p
 
 | Endpoint | API Path | Old Time | New Time | Improvement |
 |----------|----------|:--------:|:--------:|:-----------:|
-| **statsByOpenSearchAggregate** | `POST /migration/opensearch-to-postgres/statsByOpenSearchAggregate` | 16 ms | **14 ms** | 🟢 **-2 ms (12.5%)** |
-| **statsByJavaAggregation** | `POST /migration/opensearch-to-postgres/statsByJavaAggregation` | 19 ms | **19 ms** | 🟡 **0 ms (0%)** |
-| **statsByPostGresMaterializedViews** | `POST /migration/opensearch-to-postgres/statsByPostGresMaterializedViews` | 23 ms | **14 ms** | 🟢 **-9 ms (39.1%)** |
+| **statsByPostgresAggregate** | `GET /migration/opensearch-to-postgres/stats` | 16 ms | **14 ms** | 🟢 **-2 ms (12.5%)** |
+| **statsByJavaAggregation** | `GET /migration/opensearch-to-postgres/statsByJavaAggregation` | 19 ms | **19 ms** | 🟡 **0 ms (0%)** |
+| **statsByPostGresMaterializedViews** | `GET /migration/opensearch-to-postgres/statsByPostGresMaterializedViews` | 23 ms | **14 ms** | 🟢 **-9 ms (39.1%)** |
 
 ---
 
@@ -23,18 +23,18 @@ All three aggregation endpoints were benchmarked **before and after** applying p
 ```mermaid
 xychart-beta
     title "Response Time — Old vs New (ms)"
-    x-axis ["OpenSearch Aggregate", "Java Aggregation", "Postgres Materialized Views"]
+    x-axis ["Postgres CTE Aggregate", "Java Aggregation", "Postgres Materialized Views"]
     y-axis "Time (ms)" 0 --> 30
     bar "Old" [16, 19, 23]
     bar "New" [14, 19, 14]
 ```
 
-> **Old times:** OpenSearch Aggregate: 16ms | Java Aggregation: 19ms | Postgres MVs: 23ms
-> **New times:** OpenSearch Aggregate: 14ms | Java Aggregation: 19ms | Postgres MVs: 14ms
+> **Old times:** Postgres CTE Aggregate: 16ms | Java Aggregation: 19ms | Postgres MVs: 23ms
+> **New times:** Postgres CTE Aggregate: 14ms | Java Aggregation: 19ms | Postgres MVs: 14ms
 
 ---
 
-## 1. statsByOpenSearchAggregate
+## 1. statsByPostgresAggregate
 
 | | Old | New | Improvement |
 |---|:---:|:---:|:---:|
@@ -42,27 +42,29 @@ xychart-beta
 
 ### ❌ Before (Old Code) — 16 ms
 
-![statsByOpenSearchAggregate — Old](images/old/StatsByOpenSearchAGGREGATION.png)
+![statsByPostgresAggregate — Old](images/old/StatsByOpenSearchAGGREGATION.png)
 
 ### ✅ After (New Code) — 14 ms
 
-![statsByOpenSearchAggregate — New](images/new/statsByOpenSearchAggregate.png)
+![statsByPostgresAggregate — New](images/new/statsByOpenSearchAggregate.png)
 
 ### How It Works
-- Delegates aggregation to the OpenSearch engine using its native aggregation DSL.
-- OpenSearch computes `date_histogram`, `type_counts`, and `category_counts` server-side.
-- The Java layer simply maps the response JSON to the `AggregationRoot` POJO.
+- Runs a **PostgreSQL native CTE query** (`WITH periods AS ... UNION ALL`) on the live `insights_info` table.
+- PostgreSQL computes `date_histogram`, `type_counts`, and `category_counts` server-side in a single query.
+- The Java layer simply maps the result rows to the `AggregationRoot` POJO.
+
+> ⚠️ **Note:** Despite the project name referencing "OpenSearch", this endpoint does **NOT** call OpenSearch. All aggregation is performed entirely within PostgreSQL using Common Table Expressions (CTEs).
 
 ### Performance Characteristics
 | Metric | Value |
 |--------|-------|
 | Response Time | 14 ms |
-| DB Queries Executed | 0 (OpenSearch handles it) |
-| Full Table Scans (PostgreSQL) | N/A |
-| Network Round-Trips | 1 (to OpenSearch) |
+| DB Queries Executed | 2 (1 for time bounds + 1 CTE aggregation) |
+| Full Table Scans (PostgreSQL) | No — uses composite indexes |
+| Network Round-Trips | 2 (to PostgreSQL) |
 
 ### Key Optimizations Applied
-- Singleton `ObjectMapper` for JSON serialization
+- Lightweight `MIN/MAX` query for date bounds — avoids loading full entity
 - Direct mapping to `AggregationRoot` POJO — no intermediate entity conversion
 
 ---
@@ -151,20 +153,20 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Old vs New — Response Time (ms)"
-    x-axis ["OpenSearch Aggregate", "Java Aggregation", "Postgres MVs"]
+    x-axis ["Postgres CTE Aggregate", "Java Aggregation", "Postgres MVs"]
     y-axis "Time (ms)" 0 --> 30
     bar "Old" [16, 19, 23]
     bar "New" [14, 19, 14]
 ```
 
-> **Old times:** OpenSearch Aggregate: 16ms | Java Aggregation: 19ms | Postgres MVs: 23ms
-> **New times:** OpenSearch Aggregate: 14ms | Java Aggregation: 19ms | Postgres MVs: 14ms
+> **Old times:** Postgres CTE Aggregate: 16ms | Java Aggregation: 19ms | Postgres MVs: 23ms
+> **New times:** Postgres CTE Aggregate: 14ms | Java Aggregation: 19ms | Postgres MVs: 14ms
 
 ### Summary Table
 
 | Endpoint | Old (ms) | New (ms) | Improvement | DB Round-Trips | Table Scans | Pre-Computation |
 |----------|:--------:|:--------:|:-----------:|:--------------:|:-----------:|:---------------:|
-| statsByOpenSearchAggregate | 16 | **14** | 🟢 -12.5% | 0 (OpenSearch) | N/A | OpenSearch native |
+| statsByPostgresAggregate | 16 | **14** | 🟢 -12.5% | 2 (PostgreSQL) | No (indexed) | None (real-time CTE) |
 | statsByJavaAggregation | 19 | **19** | 🟡 0% | 2 | No (indexed) | None (real-time) |
 | statsByPostGresMaterializedViews | 23 | **14** | 🟢 -39.1% | 1 | No (MVs) | Background refresh |
 
@@ -227,11 +229,13 @@ CREATE UNIQUE INDEX idx_mv_category_pk
 
 | Approach | Best For | Trade-Off |
 |----------|----------|-----------|
-| **OpenSearch Aggregate** (14 ms) | Real-time aggregation when data lives in OpenSearch | Requires OpenSearch infrastructure |
+| **PostgreSQL CTE Aggregate** (14 ms) | Real-time aggregation with no extra DB objects | Slightly heavier on PostgreSQL CPU than MVs |
 | **Java Aggregation** (19 ms) | Flexible in-memory processing, no pre-computation needed | Slower with very large datasets (loads entities into JVM) |
 | **PostgreSQL Materialized Views** (14 ms) | Fastest PostgreSQL-native approach, great for dashboards | Data is slightly stale (refreshed every 5 min) |
 
-> **Recommendation:** For dashboard KPIs and charts, use **Materialized Views** (14 ms) for the best balance of speed and PostgreSQL-native simplicity. For real-time accuracy, use **Java Aggregation** (19 ms) at the cost of slightly higher latency.
+> ⚠️ **Note:** None of the stats endpoints in this project invoke OpenSearch. All aggregation is performed entirely within PostgreSQL. The `OpenSearchConfig.java` exists as a connection bean but is not used by any stats API.
+
+> **Recommendation:** For dashboard KPIs and charts, use **Materialized Views** (14 ms) for the best balance of speed and PostgreSQL-native simplicity. For real-time accuracy, use **PostgreSQL CTE Aggregate** (14 ms) or **Java Aggregation** (19 ms) as fallbacks.
 
 ---
 
