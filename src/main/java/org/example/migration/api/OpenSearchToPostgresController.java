@@ -1,9 +1,9 @@
 package org.example.migration.api;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.DTO.forensics.ForensicInfoDto;
+import org.example.migration.dto.aggregations.AggregationRoot;
 import org.example.migration.dto.SearchRequest;
 import org.example.migration.exceptions.OpenSearchToPostgresException;
 import org.example.migration.models.ForensicInfoQueryRequest;
@@ -31,6 +31,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+
 import java.net.URI;
 import java.util.Date;
 import java.util.HashMap;
@@ -48,9 +50,10 @@ public class OpenSearchToPostgresController {
     private static final Logger logger = LoggerFactory.getLogger(OpenSearchToPostgresController.class);
     private final ForensicInfoMigrationService migrationService;
 
+    // Handles POST requests to create and migrate forensic info from OpenSearch to Postgres
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ForensicInfoJson> createForensic(
-            @RequestBody ForensicInfoDto forensicInfoDto) throws OpenSearchToPostgresException {
+            @RequestBody @Valid ForensicInfoDto forensicInfoDto) throws OpenSearchToPostgresException {
 
         logger.info("Received request to migrate forensic info: {}", forensicInfoDto);
 
@@ -65,6 +68,7 @@ public class OpenSearchToPostgresController {
         return ResponseEntity.created(URI.create("/migration/opensearch-to-postgres/" + forensicInfoJson.getId())).body(forensicInfoJson);
     }
 
+    // Handles POST requests to query forensic info with optional filters and pagination
     @PostMapping("/query")
     public Page<ForensicInfoJson> query(
             @RequestBody(required = false) ForensicInfoQueryRequest queryRequest,
@@ -86,8 +90,8 @@ public class OpenSearchToPostgresController {
         return migrationService.query(accountId, after, before, pageable, filteredTerms);
     }
 
+    // Handles POST requests to fetch insights with filters, pagination, and search terms
     @PostMapping("/insights")
-    @Transactional
     public Page<InsightInfo> insights(Pageable pageable,
                                       @RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
                                       @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,
@@ -106,40 +110,43 @@ public class OpenSearchToPostgresController {
         return migrationService.search(lookupAccountId(), before, after, pageable, mergedQueryTerms);
     }
 
+    // Handles GET requests to fetch statistics for forensic info
     @GetMapping("/stats")
-    public String stats(@RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
+    public ResponseEntity<AggregationRoot> stats(@RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
                         @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,
                         @RequestParam Map<String, String> terms,
                         @RequestHeader(value = "Z-Client-Timezone", defaultValue = "UTC") String timezoneId,
-                        HttpServletRequest request) throws OpenSearchToPostgresException, JsonProcessingException {
+                        HttpServletRequest request) throws OpenSearchToPostgresException {
 
         log.debug("Processing stats GET {}?{}", request.getRequestURL(), request.getQueryString());
 
-        return migrationService.stats(before, after, terms, timezoneId, lookupAccountId());
+        return ResponseEntity.ok(migrationService.stats(before, after, terms, timezoneId, lookupAccountId()));
     }
 
+    // Handles GET requests to fetch statistics using Java aggregation
     @GetMapping("/statsByJavaAggregation")
-    public String statsByJavaAggregation(@RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
-                        @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,
-                        @RequestParam Map<String, String> terms,
-                        @RequestHeader(value = "Z-Client-Timezone", defaultValue = "UTC") String timezoneId,
-                        HttpServletRequest request) throws OpenSearchToPostgresException, JsonProcessingException {
+    public ResponseEntity<AggregationRoot> statsByJavaAggregation(@RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
+                    @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,
+                    @RequestParam Map<String, String> terms,
+                    @RequestHeader(value = "Z-Client-Timezone", defaultValue = "UTC") String timezoneId,
+                    HttpServletRequest request) throws OpenSearchToPostgresException {
 
         log.debug("Processing stats GET {}?{}", request.getRequestURL(), request.getQueryString());
 
-        return migrationService.statsByJavaAggregation(before, after, terms, timezoneId, lookupAccountId());
+        return ResponseEntity.ok(migrationService.statsByJavaAggregation(before, after, terms, timezoneId, lookupAccountId()));
     }
 
+    // Handles GET requests to fetch statistics using Postgres materialized views
     @GetMapping("/statsByPostGresMaterializedViews")
-    public String statsByPostGresMaterializedViews(@RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
-                        @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,
-                        @RequestParam Map<String, String> terms,
-                        @RequestHeader(value = "Z-Client-Timezone", defaultValue = "UTC") String timezoneId,
-                        HttpServletRequest request) throws OpenSearchToPostgresException, JsonProcessingException {
+    public ResponseEntity<AggregationRoot> statsByPostGresMaterializedViews(@RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
+                    @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,
+                    @RequestParam Map<String, String> terms,
+                    @RequestHeader(value = "Z-Client-Timezone", defaultValue = "UTC") String timezoneId,
+                    HttpServletRequest request) throws OpenSearchToPostgresException {
 
         log.debug("Processing stats GET {}?{}", request.getRequestURL(), request.getQueryString());
 
-        return migrationService.aggregateInsightsFromMaterializedViews(before, after, terms, timezoneId, lookupAccountId());
+        return ResponseEntity.ok(migrationService.aggregateInsightsFromMaterializedViews(before, after, terms, timezoneId, lookupAccountId()));
     }
 
     // Placeholder for lookupAccountId (implement as needed)

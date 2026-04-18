@@ -3,8 +3,6 @@ package org.example.migration.repository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Query;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.example.migration.dto.aggregations.AggregationRoot;
 import org.example.migration.dto.aggregations.Aggregations;
@@ -24,13 +22,11 @@ import java.util.Map;
 //public class CustomizedInsightsRepositoryImpl implements InsightsInfoRepository {
 public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepository {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-
     @PersistenceContext
     private EntityManager entityManager;
 
     @Override
-    public String aggregateInsights(String accountId, String investigationId, Date after, Date before, Map<String, String> terms, String timezoneId)  {
+    public AggregationRoot aggregateInsights(String accountId, String investigationId, Date after, Date before, Map<String, String> terms, String timezoneId)  {
         // Format: 'YYYY-MM' for month, adjust as needed
         String format = "YYYY-MM-DD";
         String interval = "1 month"; // or '1 day', etc.
@@ -135,11 +131,7 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
                 .simpleValueTotalDocCount(simpleValueTotalDocCount)
                 .build();
         AggregationRoot aggregationRoot = AggregationRoot.builder().aggregations(aggregations).build();
-        try {
-            return OBJECT_MAPPER.writeValueAsString(aggregationRoot);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+        return aggregationRoot;
     }
 
 
@@ -154,7 +146,7 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
 
     @Transactional(readOnly = true)
     @Override
-    public String aggregateInsightsFromMaterializedViews(String accountId, String investigationId, Date after, Date before) {
+    public AggregationRoot aggregateInsightsFromMaterializedViews(String accountId, String investigationId, Date after, Date before) {
         long start = System.currentTimeMillis();
 
         // Single UNION ALL query across all 3 materialized views — 1 round-trip instead of 3
@@ -241,14 +233,9 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
                 .build();
         AggregationRoot aggregationRoot = AggregationRoot.builder().aggregations(aggregations).build();
 
-        try {
-            String json = OBJECT_MAPPER.writeValueAsString(aggregationRoot);
-            long totalElapsed = System.currentTimeMillis() - start;
-            log.info("aggregateInsightsFromMaterializedViews completed in {}ms (query: {}ms, mapping: {}ms)",
-                    totalElapsed, queryElapsed, totalElapsed - queryElapsed);
-            return json;
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+        long totalElapsed = System.currentTimeMillis() - start;
+        log.info("aggregateInsightsFromMaterializedViews completed in {}ms (query: {}ms, mapping: {}ms)",
+                totalElapsed, queryElapsed, totalElapsed - queryElapsed);
+        return aggregationRoot;
     }
 }

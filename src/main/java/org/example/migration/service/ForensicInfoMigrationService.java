@@ -1,7 +1,5 @@
 package org.example.migration.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -47,7 +45,6 @@ import static org.example.migration.util.ConverterUtil.convertToPostgresEntity;
 @RequiredArgsConstructor
 public class ForensicInfoMigrationService {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ForensicInfoRepository forensicInfoRepository;
     private final InsightsInfoRepository insightsInfoRepository;
@@ -91,6 +88,7 @@ public class ForensicInfoMigrationService {
         return page.map(forensicsMapperPostGres::toForensicInfoJson);
     }
 
+    @Transactional
     public Page<InsightInfo> search(String accountId, Date before, Date after, Pageable pageable, Map<String, String> terms) throws OpenSearchToPostgresException {
         String investigationId = terms.get("forensicInfo.keyword");
         if (StringUtils.isEmpty(investigationId)) {
@@ -161,7 +159,7 @@ public class ForensicInfoMigrationService {
         return investigationId;
     }
 
-    public String stats(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException, JsonProcessingException {
+    public AggregationRoot stats(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
         String investigationId = validateAndGetInvestigationId(terms);
 
         // Use lightweight query instead of loading full entity
@@ -172,7 +170,7 @@ public class ForensicInfoMigrationService {
         return insightsInfoRepository.aggregateInsights(accountId, investigationId, after, before, terms, timezoneId);
     }
 
-    public String aggregateInsightsFromMaterializedViews(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException, JsonProcessingException {
+    public AggregationRoot aggregateInsightsFromMaterializedViews(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
         String investigationId = validateAndGetInvestigationId(terms);
 
         // Use lightweight query instead of loading full entity
@@ -183,7 +181,7 @@ public class ForensicInfoMigrationService {
         return insightsInfoRepository.aggregateInsightsFromMaterializedViews(accountId, investigationId, after, before);
     }
 
-    public String statsByJavaAggregation(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException, JsonProcessingException {
+    public AggregationRoot statsByJavaAggregation(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
         String investigationId = validateAndGetInvestigationId(terms);
 
         // Use lightweight query instead of loading full entity
@@ -205,7 +203,7 @@ public class ForensicInfoMigrationService {
      * Single-pass aggregation: iterates insightsList once to compute
      * date histogram, type counts, and category counts simultaneously.
      */
-    public String aggregateFromInsightsList(List<InsightsInfo> insightsList, Date after, Date before, String timezoneId) {
+    public AggregationRoot aggregateFromInsightsList(List<InsightsInfo> insightsList, Date after, Date before, String timezoneId) {
         long start = System.currentTimeMillis();
 
         ZoneId zone = ZoneId.of(timezoneId);
@@ -291,13 +289,8 @@ public class ForensicInfoMigrationService {
                 .build();
         AggregationRoot aggregationRoot = AggregationRoot.builder().aggregations(aggregations).build();
 
-        try {
-            String json = OBJECT_MAPPER.writeValueAsString(aggregationRoot);
-            long elapsed = System.currentTimeMillis() - start;
-            log.info("aggregateFromInsightsList completed in {}ms for {} insights", elapsed, insightsList.size());
-            return json;
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+        long elapsed = System.currentTimeMillis() - start;
+        log.info("aggregateFromInsightsList completed in {}ms for {} insights", elapsed, insightsList.size());
+        return aggregationRoot;
     }
 }

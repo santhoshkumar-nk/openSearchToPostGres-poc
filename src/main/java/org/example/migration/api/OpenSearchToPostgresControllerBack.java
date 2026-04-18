@@ -1,3 +1,4 @@
+/*
 package org.example.migration.api;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -208,3 +209,4 @@ public class OpenSearchToPostgresControllerBack {
 }
 
 
+*/

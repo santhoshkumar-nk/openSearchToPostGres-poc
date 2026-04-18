@@ -3,7 +3,6 @@ package org.example.migration.repository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Query;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import org.example.migration.dto.aggregations.AggregationRoot;
 import org.example.migration.dto.aggregations.Aggregations;
 import org.example.migration.dto.aggregations.DateHistogramInsightsOverTime;
@@ -26,7 +25,7 @@ public class CustomizedInsightsRepositoryImplBack implements CustomizedInsightsR
     private EntityManager entityManager;
 
     @Override
-    public String aggregateInsights(String accountId, String investigationId, Date after, Date before, Map<String, String> terms, String timezoneId)  {
+    public AggregationRoot aggregateInsights(String accountId, String investigationId, Date after, Date before, Map<String, String> terms, String timezoneId)  {
         // Single SQL Query for All Aggregations
         String sql = """
         WITH periods AS (
@@ -112,11 +111,7 @@ public class CustomizedInsightsRepositoryImplBack implements CustomizedInsightsR
                 .simpleValueTotalDocCount(simpleValueTotalDocCount)
                 .build();
         AggregationRoot aggregationRoot = AggregationRoot.builder().aggregations(aggregations).build();
-        try {
-            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(aggregationRoot);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+        return aggregationRoot;
     }
 
     /**
@@ -125,15 +120,14 @@ public class CustomizedInsightsRepositoryImplBack implements CustomizedInsightsR
      * @param after
      * @param before
      * @return
-     * @throws JsonProcessingException
      */
     @Override
-    public String aggregateInsightsFromMaterializedViews(String accountId, String investigationId, Date after, Date before) throws JsonProcessingException {
-        return "";
+    public AggregationRoot aggregateInsightsFromMaterializedViews(String accountId, String investigationId, Date after, Date before) {
+        return AggregationRoot.builder().build();
     }
 
 
-    public String aggregateFromInsightsList(List<InsightsInfo> insightsList, Date after, Date before, String timezoneId) {
+    public AggregationRoot aggregateFromInsightsList(List<InsightsInfo> insightsList, Date after, Date before, String timezoneId) {
         // 1. Date histogram buckets
         Map<String, Long> dateHistogramMap = new java.util.HashMap<>();
         java.time.LocalDate start = after.toInstant().atZone(java.time.ZoneOffset.UTC).toLocalDate();
@@ -216,12 +210,7 @@ public class CustomizedInsightsRepositoryImplBack implements CustomizedInsightsR
                 .simpleValueTotalDocCount(simpleValueTotalDocCount)
                 .build();
         AggregationRoot aggregationRoot = AggregationRoot.builder().aggregations(aggregations).build();
-
-        try {
-            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(aggregationRoot);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+        return aggregationRoot;
     }
 
 }
