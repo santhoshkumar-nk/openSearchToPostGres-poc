@@ -10,6 +10,8 @@ import org.example.migration.dto.aggregations.DateHistogramInsightsOverTime;
 import org.example.migration.dto.aggregations.FiltersTypeCounts;
 import org.example.migration.dto.aggregations.StermsCategory;
 import org.example.migration.dto.aggregations.SimpleValueTotalDocCount;
+import org.example.migration.util.RSQLNativeSqlBuilder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,11 +28,13 @@ import java.util.Map;
 
 @Slf4j
 @Repository
-//public class CustomizedInsightsRepositoryImpl implements InsightsInfoRepository {
 public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepository {
 
     @PersistenceContext
     private EntityManager entityManager;
+
+    @Autowired
+    private RSQLNativeSqlBuilder rsqlNativeSqlBuilder;
 
     @Override
     public AggregationRoot aggregateInsights(String accountId, String investigationId, Date after, Date before, Map<String, String> terms, String timezoneId)  {
@@ -391,27 +395,7 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
 
         // Build filter SQL fragment only when "query" key is present in terms
         // e.g. query=type=in=(ioc,suspicious) → AND LOWER(type) IN (LOWER(:fv_0), LOWER(:fv_1))
-        String filterFragment = "";
-        Map<String, String> filterParams = new LinkedHashMap<>();
-        if (terms != null && terms.containsKey("query")) {
-            String rsql = terms.get("query");
-            if (rsql != null && !rsql.isBlank()) {
-                cz.jirutka.rsql.parser.ast.Node rootNode = new cz.jirutka.rsql.parser.RSQLParser().parse(rsql);
-                if (rootNode instanceof cz.jirutka.rsql.parser.ast.ComparisonNode cn) {
-                    String column = cn.getSelector(); // e.g. "type"
-                    List<String> values = cn.getArguments(); // e.g. ["ioc", "suspicious"]
-                    StringBuilder inClause = new StringBuilder("AND LOWER(" + column + ") IN (");
-                    for (int i = 0; i < values.size(); i++) {
-                        String paramName = "fv_" + i;
-                        if (i > 0) inClause.append(", ");
-                        inClause.append("LOWER(:").append(paramName).append(")");
-                        filterParams.put(paramName, values.get(i));
-                    }
-                    inClause.append(")");
-                    filterFragment = inClause.toString();
-                }
-            }
-        }
+        RSQLNativeSqlBuilder.RSQLFilterResult rsqlFilterResult = buildRSQLFilterFragment(terms);
 
         // CTE 'matched' scans insights_info ONCE and is reused by all three aggregations,
         // avoiding 3 separate sequential scans of the same filtered dataset.
@@ -425,7 +409,7 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
                   AND (type        ILIKE :search
                     OR category    ILIKE :search
                     OR description ILIKE :search)
-            """ + filterFragment + """
+            """ + rsqlFilterResult.fragment() + """
             )
             SELECT 'date_histogram' AS agg_type,
                     original_insight_time AS key,
@@ -452,7 +436,7 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         query.setParameter("search", likePattern);
 
         // Bind filter values dynamically (only when query term is present)
-        filterParams.forEach(query::setParameter);
+        rsqlFilterResult.params().forEach(query::setParameter);
 
         @SuppressWarnings("unchecked")
         List<Object[]> results = query.getResultList();
@@ -601,5 +585,9 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         log.info("{} completed in {}ms (query: {}ms, mapping: {}ms)",
                 callerName, totalElapsed, queryElapsed, totalElapsed - queryElapsed);
         return AggregationRoot.builder().aggregations(aggregations).build();
+    }
+
+    private RSQLNativeSqlBuilder.RSQLFilterResult buildRSQLFilterFragment(Map<String, String> terms) {
+        return rsqlNativeSqlBuilder.buildFilterFragment(terms);
     }
 }
