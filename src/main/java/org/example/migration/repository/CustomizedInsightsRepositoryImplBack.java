@@ -1,3 +1,4 @@
+/*
 package org.example.migration.repository;
 
 import jakarta.persistence.EntityManager;
@@ -114,17 +115,36 @@ public class CustomizedInsightsRepositoryImplBack implements CustomizedInsightsR
         return aggregationRoot;
     }
 
-    /**
+    @Override
+    public AggregationRoot aggregateInsightsFromMaterializedViews(String accountId, String investigationId, Date after, Date before, String searchTerm) {
+        return null;
+    }
+
+    */
+/**
      * @param accountId
      * @param investigationId
      * @param after
      * @param before
      * @return
-     */
-    @Override
-    public AggregationRoot aggregateInsightsFromMaterializedViews(String accountId, String investigationId, Date after, Date before) {
+     *//*
+
+
+    public AggregationRoot aggregateInsightsFromMaterializedViews1(String accountId, String investigationId, Date after, Date before) {
         return AggregationRoot.builder().build();
     }
+
+    @Override
+    public AggregationRoot aggregateInsightsFromTimescaleDB(String accountId, String investigationId, Date after, Date before) {
+        return AggregationRoot.builder().build();
+    }
+
+    @Override
+    public AggregationRoot aggregateInsightsWithSearchFilter(String accountId, String investigationId,
+                                                              Date after, Date before, String searchTerm) {
+        return AggregationRoot.builder().build();
+    }
+
 
 
     public AggregationRoot aggregateFromInsightsList(List<InsightsInfo> insightsList, Date after, Date before, String timezoneId) {
@@ -214,3 +234,4 @@ public class CustomizedInsightsRepositoryImplBack implements CustomizedInsightsR
     }
 
 }
+*/

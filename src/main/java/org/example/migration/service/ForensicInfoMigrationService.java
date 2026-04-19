@@ -200,12 +200,31 @@ public class ForensicInfoMigrationService {
     public AggregationRoot aggregateInsightsFromMaterializedViews(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
         String investigationId = validateAndGetInvestigationId(terms);
 
-        // Use lightweight query instead of loading full entity
         Date[] bounds = resolveTimeBounds(accountId, investigationId, after, before);
         after = bounds[0];
         before = bounds[1];
 
-        return insightsInfoRepository.aggregateInsightsFromMaterializedViews(accountId, investigationId, after, before);
+        // If a search/query term is present, MVs cannot filter dynamically —
+        // fall back to querying insights_info directly with ILIKE
+        String searchTerm = terms.get("search");
+        /*if (StringUtils.isNotBlank(searchTerm)) {
+            log.info("Search term '{}' detected — bypassing MVs, querying insights_info directly", searchTerm);
+            return insightsInfoRepository.aggregateInsightsWithSearchFilter(
+                    accountId, investigationId, after, before, searchTerm);
+        }*/
+
+        return insightsInfoRepository.aggregateInsightsFromMaterializedViews(accountId, investigationId, after, before,  searchTerm);
+    }
+
+    // Aggregates insights using TimescaleDB continuous aggregates
+    public AggregationRoot statsByTimescaleDB(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
+        String investigationId = validateAndGetInvestigationId(terms);
+
+        Date[] bounds = resolveTimeBounds(accountId, investigationId, after, before);
+        after = bounds[0];
+        before = bounds[1];
+
+        return insightsInfoRepository.aggregateInsightsFromTimescaleDB(accountId, investigationId, after, before);
     }
 
     public AggregationRoot statsByJavaAggregation(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
