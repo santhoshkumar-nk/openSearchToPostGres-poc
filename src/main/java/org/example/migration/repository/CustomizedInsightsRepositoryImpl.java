@@ -189,15 +189,17 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         List<StermsCategory.Bucket> categoryBuckets = new java.util.ArrayList<>();
         double totalDocCount = 0;
 
-        for (Object[] row : results) {
+            for (Object[] row : results) {
             String aggType = (String) row[0];
             if ("date_histogram".equals(aggType)) {
-                String period = (String) row[1];
+                java.sql.Timestamp periodTs = (java.sql.Timestamp) row[1];
+                String period = periodTs.toInstant().atZone(java.time.ZoneOffset.UTC)
+                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
                 Long docCount = ((Number) row[4]).longValue();
                 totalDocCount += docCount;
                 buckets.add(DateHistogramInsightsOverTime.Bucket.builder()
                         .key_as_string(period)
-                        .key(java.time.LocalDate.parse(period).atStartOfDay(java.time.ZoneOffset.UTC).toEpochSecond())
+                        .key(periodTs.toInstant().toEpochMilli())
                         .doc_count(docCount)
                         .build());
             } else if ("type_counts".equals(aggType)) {

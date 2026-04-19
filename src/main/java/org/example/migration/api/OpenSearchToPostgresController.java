@@ -2,7 +2,6 @@ package org.example.migration.api;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.example.DTO.forensics.ForensicInfoDto;
 import org.example.migration.dto.aggregations.AggregationRoot;
 import org.example.migration.dto.SearchRequest;
 import org.example.migration.exceptions.OpenSearchToPostgresException;
@@ -26,15 +25,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.multipart.MultipartFile;
 
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.Valid;
 
 import java.net.URI;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 import static org.example.migration.util.QueryTermUtils.combineFilterStrings;
 
@@ -45,19 +44,15 @@ import static org.example.migration.util.QueryTermUtils.combineFilterStrings;
 public class OpenSearchToPostgresController {
     private final ForensicInfoMigrationService migrationService;
 
-    // Handles POST requests to create and migrate forensic info from OpenSearch to Postgres
-    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ForensicInfoJson> createForensic(
-            @RequestBody @Valid ForensicInfoDto forensicInfoDto) throws OpenSearchToPostgresException {
+    // Handles POST requests to create and migrate forensic info from uploaded JSON file
+    @PostMapping(path = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ForensicInfoJson> upload(
+            @RequestPart MultipartFile forensicsFile,
+            HttpServletRequest request) throws OpenSearchToPostgresException {
 
-        log.info("Received request to migrate forensic info: {}", forensicInfoDto);
+        log.info("Received file: {}, size: {} bytes", forensicsFile.getOriginalFilename(), forensicsFile.getSize());
 
-        if (forensicInfoDto.getId() == null || forensicInfoDto.getId().isBlank()) {
-            String generatedId = UUID.randomUUID().toString();
-            forensicInfoDto.setId(generatedId);
-            log.info("No ID provided. Generated new ID: {}", generatedId);
-        }
-        ForensicInfoJson forensicInfoJson = migrationService.saveForensicInfo(forensicInfoDto);
+        ForensicInfoJson forensicInfoJson = migrationService.saveForensicInfo(forensicsFile);
 
         log.info("Successfully migrated forensic info with ID: {}", forensicInfoJson.getId());
         return ResponseEntity.created(URI.create("/migration/opensearch-to-postgres/" + forensicInfoJson.getId())).body(forensicInfoJson);

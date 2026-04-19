@@ -1,5 +1,6 @@
 package org.example.migration.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -23,9 +24,14 @@ import org.example.migration.util.QueryTermUtils;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.InputStream;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -36,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.stream.Collectors;
 
 import static java.util.Objects.isNull;
 import static org.example.migration.util.ConverterUtil.convertToPostgresEntity;
@@ -51,23 +58,41 @@ public class ForensicInfoMigrationService {
     private final ForensicsMapperPostGres forensicsMapperPostGres;
     private final ConverterUtil converterUtil;
     private final QueryTermUtils queryTermUtils;
+    private final ObjectMapper objectMapper;
 
     @Transactional
-    public ForensicInfoJson saveForensicInfo(ForensicInfoDto dto) throws OpenSearchToPostgresException {
+    public ForensicInfoJson saveForensicInfo(MultipartFile file) throws OpenSearchToPostgresException {
+
+        // Parse the uploaded JSON file into ForensicInfoDto
+        ForensicInfoDto dto;
+        try (InputStream inputStream = file.getInputStream()) {
+            dto = objectMapper.readValue(inputStream, ForensicInfoDto.class);
+        } catch (Exception ex) {
+            log.error("Failed to parse uploaded file: {}", file.getOriginalFilename(), ex);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to process the uploaded file");
+        }
+
+        // Convert DTO → JSON model → PostgreSQL entity
         ForensicInfoJson json = converterUtil.convertDto(dto);
         ForensicInfo entity = convertToPostgresEntity(json);
         if (entity == null) {
             throw new OpenSearchToPostgresException("Failed to convert ForensicInfoJson to ForensicInfo entity");
         }
+
+        // Compute insight counts and set bidirectional relationship
         entity.computeCount();
         if (entity.getInsights() != null) {
             entity.getInsights().forEach(i -> i.setForensicInfo(entity));
         }
+
+        // Persist to PostgreSQL
         try {
             forensicInfoRepository.save(entity);
         } catch (Exception e) {
             throw new OpenSearchToPostgresException("Failed to save ForensicInfo entity", e);
         }
+
+        // Map back to JSON response
         ForensicInfoJson result = forensicsMapperPostGres.toForensicInfoJson(entity);
         if (result == null) {
             throw new OpenSearchToPostgresException("Failed to map ForensicInfo entity to ForensicInfoJson");
