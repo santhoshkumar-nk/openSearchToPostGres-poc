@@ -59,6 +59,7 @@ public class ForensicInfoMigrationService {
     private final ConverterUtil converterUtil;
     private final QueryTermUtils queryTermUtils;
     private final ObjectMapper objectMapper;
+    private final MaterializedViewRefreshService materializedViewRefreshService;
 
     @Transactional
     public ForensicInfoJson saveForensicInfo(MultipartFile file) throws OpenSearchToPostgresException {
@@ -92,6 +93,7 @@ public class ForensicInfoMigrationService {
             throw new OpenSearchToPostgresException("Failed to save ForensicInfo entity", e);
         }
 
+        materializedViewRefreshService.refreshOnDemand();
         // Map back to JSON response
         ForensicInfoJson result = forensicsMapperPostGres.toForensicInfoJson(entity);
         if (result == null) {
