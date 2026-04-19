@@ -13,7 +13,13 @@ import org.example.migration.dto.aggregations.SimpleValueTotalDocCount;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -184,27 +190,46 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         log.info("MV UNION ALL query returned {} rows in {}ms", results.size(), queryElapsed);
 
         // Map results — same pattern as aggregateInsights
-        List<DateHistogramInsightsOverTime.Bucket> buckets = new java.util.ArrayList<>();
+        // Step 1: Pre-fill ALL dates in after→before range with doc_count=0 (1-day interval)
+        // Use LinkedHashMap to preserve insertion order (chronological)
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        Map<String, long[]> dateCountMap = new LinkedHashMap<>();
+        LocalDate startDate = after.toInstant().atZone(ZoneOffset.UTC).toLocalDate();
+        LocalDate endDate   = before.toInstant().atZone(ZoneOffset.UTC).toLocalDate();
+        for (LocalDate d = startDate; !d.isAfter(endDate); d = d.plusDays(1)) {
+            // Represent each day at midnight UTC — matches MV period granularity
+            LocalDateTime midnight = d.atStartOfDay();
+            long epochMilli = midnight.toInstant(ZoneOffset.UTC).toEpochMilli();
+            String keyAsString = midnight.format(formatter);
+            dateCountMap.put(keyAsString, new long[]{epochMilli, 0L});
+        }
+
         FiltersTypeCounts.Buckets bucketsType = FiltersTypeCounts.Buckets.builder().build();
-        List<StermsCategory.Bucket> categoryBuckets = new java.util.ArrayList<>();
+        List<StermsCategory.Bucket> categoryBuckets = new ArrayList<>();
         double totalDocCount = 0;
 
-            for (Object[] row : results) {
+        // Step 2: Overwrite pre-filled zeros with actual counts from MV query
+        for (Object[] row : results) {
             String aggType = (String) row[0];
             if ("date_histogram".equals(aggType)) {
                 java.sql.Timestamp periodTs = (java.sql.Timestamp) row[1];
-                String period = periodTs.toInstant().atZone(java.time.ZoneOffset.UTC)
-                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                Long docCount = ((Number) row[4]).longValue();
+                long docCount = ((Number) row[4]).longValue();
                 totalDocCount += docCount;
-                buckets.add(DateHistogramInsightsOverTime.Bucket.builder()
-                        .key_as_string(period)
-                        .key(periodTs.toInstant().toEpochMilli())
-                        .doc_count(docCount)
-                        .build());
+                // Format the MV timestamp to the same key format used in the pre-fill map
+                String keyAsString = periodTs.toInstant()
+                        .atZone(ZoneOffset.UTC)
+                        .toLocalDateTime()
+                        .format(formatter);
+                if (dateCountMap.containsKey(keyAsString)) {
+                    // Overwrite the 0 with the real count
+                    dateCountMap.get(keyAsString)[1] = docCount;
+                } else {
+                    // MV returned a period outside the pre-filled range — add it anyway
+                    dateCountMap.put(keyAsString, new long[]{periodTs.toInstant().toEpochMilli(), docCount});
+                }
             } else if ("type_counts".equals(aggType)) {
                 String type = (String) row[2];
-                Long count = ((Number) row[4]).longValue();
+                long count = ((Number) row[4]).longValue();
                 if ("Abnormal".equalsIgnoreCase(type)) {
                     bucketsType.setAbnormal(FiltersTypeCounts.DocCount.builder().doc_count(count).build());
                 } else if ("Indicator of Compromise".equalsIgnoreCase(type) || "IoC".equalsIgnoreCase(type)) {
@@ -214,13 +239,25 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
                 }
             } else if ("category_counts".equals(aggType)) {
                 String category = (String) row[3];
-                Long count = ((Number) row[4]).longValue();
+                long count = ((Number) row[4]).longValue();
                 categoryBuckets.add(StermsCategory.Bucket.builder()
                         .key(category)
                         .doc_count(count)
                         .build());
             }
         }
+
+        // Step 3: Build sorted bucket list from the pre-filled + merged map
+        List<DateHistogramInsightsOverTime.Bucket> buckets = new ArrayList<>();
+        dateCountMap.forEach((keyAsString, epochAndCount) ->
+                buckets.add(DateHistogramInsightsOverTime.Bucket.builder()
+                        .key_as_string(keyAsString)
+                        .key(epochAndCount[0])
+                        .doc_count(epochAndCount[1])
+                        .build())
+        );
+        // Sort chronologically by key_as_string (LinkedHashMap is already ordered, but sort for safety)
+        buckets.sort((a, b) -> a.getKey_as_string().compareTo(b.getKey_as_string()));
 
         DateHistogramInsightsOverTime dhiot = DateHistogramInsightsOverTime.builder().buckets(buckets).build();
         FiltersTypeCounts filtersTypeCounts = FiltersTypeCounts.builder().buckets(bucketsType).build();
