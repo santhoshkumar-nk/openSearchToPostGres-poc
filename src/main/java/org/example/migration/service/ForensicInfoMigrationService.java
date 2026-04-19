@@ -244,7 +244,7 @@ public class ForensicInfoMigrationService {
         before = bounds[1];
 
         log.info("statsByWildcardSearch: accountId={}, investigationId={}, search={}", accountId, investigationId, searchTerm);
-        return insightsInfoRepository.aggregateInsightsWithSearchFilter(accountId, investigationId, after, before, searchTerm);
+        return insightsInfoRepository.aggregateInsightsWithSearchFilter(accountId, investigationId, after, before, searchTerm, terms);
     }
 
     public AggregationRoot statsByJavaAggregation(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {

@@ -383,11 +383,35 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
     @Transactional(readOnly = true)
     @Override
     public AggregationRoot aggregateInsightsWithSearchFilter(String accountId, String investigationId,
-                                                              Date after, Date before, String searchTerm) {
+                                                              Date after, Date before, String searchTerm, Map<String, String> terms) {
         long start = System.currentTimeMillis();
 
         // Strip wildcard suffix (*) and wrap in SQL ILIKE pattern (%term%)
         String likePattern = "%" + searchTerm.replace("*", "") + "%";
+
+        // Build filter SQL fragment only when "query" key is present in terms
+        // e.g. query=type=in=(ioc,suspicious) → AND LOWER(type) IN (LOWER(:fv_0), LOWER(:fv_1))
+        String filterFragment = "";
+        Map<String, String> filterParams = new LinkedHashMap<>();
+        if (terms != null && terms.containsKey("query")) {
+            String rsql = terms.get("query");
+            if (rsql != null && !rsql.isBlank()) {
+                cz.jirutka.rsql.parser.ast.Node rootNode = new cz.jirutka.rsql.parser.RSQLParser().parse(rsql);
+                if (rootNode instanceof cz.jirutka.rsql.parser.ast.ComparisonNode cn) {
+                    String column = cn.getSelector(); // e.g. "type"
+                    List<String> values = cn.getArguments(); // e.g. ["ioc", "suspicious"]
+                    StringBuilder inClause = new StringBuilder("AND LOWER(" + column + ") IN (");
+                    for (int i = 0; i < values.size(); i++) {
+                        String paramName = "fv_" + i;
+                        if (i > 0) inClause.append(", ");
+                        inClause.append("LOWER(:").append(paramName).append(")");
+                        filterParams.put(paramName, values.get(i));
+                    }
+                    inClause.append(")");
+                    filterFragment = inClause.toString();
+                }
+            }
+        }
 
         // CTE 'matched' scans insights_info ONCE and is reused by all three aggregations,
         // avoiding 3 separate sequential scans of the same filtered dataset.
@@ -401,6 +425,7 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
                   AND (type        ILIKE :search
                     OR category    ILIKE :search
                     OR description ILIKE :search)
+            """ + filterFragment + """
             )
             SELECT 'date_histogram' AS agg_type,
                     original_insight_time AS key,
@@ -425,6 +450,9 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         query.setParameter("after", after);
         query.setParameter("before", before);
         query.setParameter("search", likePattern);
+
+        // Bind filter values dynamically (only when query term is present)
+        filterParams.forEach(query::setParameter);
 
         @SuppressWarnings("unchecked")
         List<Object[]> results = query.getResultList();
