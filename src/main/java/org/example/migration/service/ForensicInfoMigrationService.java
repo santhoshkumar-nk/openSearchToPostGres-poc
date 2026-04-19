@@ -227,6 +227,26 @@ public class ForensicInfoMigrationService {
         return insightsInfoRepository.aggregateInsightsFromTimescaleDB(accountId, investigationId, after, before);
     }
 
+    /**
+     * Aggregates insights by querying insights_info directly using a single CTE with ILIKE
+     * wildcard search across type, category, and description. Requires a non-blank search term.
+     */
+    public AggregationRoot statsByWildcardSearch(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
+        String investigationId = validateAndGetInvestigationId(terms);
+
+        String searchTerm = terms.get("search");
+        if (StringUtils.isBlank(searchTerm)) {
+            throw new OpenSearchToPostgresException("A 'search' query parameter is required for wildcard search");
+        }
+
+        Date[] bounds = resolveTimeBounds(accountId, investigationId, after, before);
+        after = bounds[0];
+        before = bounds[1];
+
+        log.info("statsByWildcardSearch: accountId={}, investigationId={}, search={}", accountId, investigationId, searchTerm);
+        return insightsInfoRepository.aggregateInsightsWithSearchFilter(accountId, investigationId, after, before, searchTerm);
+    }
+
     public AggregationRoot statsByJavaAggregation(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
         String investigationId = validateAndGetInvestigationId(terms);
 

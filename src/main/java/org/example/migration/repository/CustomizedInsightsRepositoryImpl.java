@@ -377,6 +377,7 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
      * Queries insights_info directly with an ILIKE search filter applied across
      * type, category, and description columns.
      * Used when MVs cannot serve the request (e.g. search=Informational*).
+     * Uses a single CTE scan of insights_info (instead of 3 separate scans) for performance.
      * Pre-fills missing date buckets with doc_count=0 for the full after→before range.
      */
     @Transactional(readOnly = true)
@@ -388,40 +389,34 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         // Strip wildcard suffix (*) and wrap in SQL ILIKE pattern (%term%)
         String likePattern = "%" + searchTerm.replace("*", "") + "%";
 
+        // CTE 'matched' scans insights_info ONCE and is reused by all three aggregations,
+        // avoiding 3 separate sequential scans of the same filtered dataset.
         String sql = """
+            WITH matched AS (
+                SELECT original_insight_time, type, category
+                FROM insights_info
+                WHERE account_id = :accountId
+                  AND forensic_info_id = :investigationId
+                  AND original_insight_time BETWEEN :after AND :before
+                  AND (type        ILIKE :search
+                    OR category    ILIKE :search
+                    OR description ILIKE :search)
+            )
             SELECT 'date_histogram' AS agg_type,
-                   to_char(date_trunc('day', i.original_insight_time AT TIME ZONE 'UTC'), 'YYYY-MM-DD HH24:MI:SS') AS key,
+                    original_insight_time AS key,
                    NULL AS type,
                    NULL AS category,
                    COUNT(*) AS doc_count
-            FROM insights_info i
-            WHERE i.account_id = :accountId
-              AND i.forensic_info_id = :investigationId
-              AND i.original_insight_time BETWEEN :after AND :before
-              AND (i.type      ILIKE :search
-                OR i.category  ILIKE :search
-                OR i.description ILIKE :search)
-            GROUP BY date_trunc('day', i.original_insight_time AT TIME ZONE 'UTC')
+            FROM matched
+            GROUP BY original_insight_time
             UNION ALL
-            SELECT 'type_counts', NULL, i.type, NULL, COUNT(*)
-            FROM insights_info i
-            WHERE i.account_id = :accountId
-              AND i.forensic_info_id = :investigationId
-              AND i.original_insight_time BETWEEN :after AND :before
-              AND (i.type      ILIKE :search
-                OR i.category  ILIKE :search
-                OR i.description ILIKE :search)
-            GROUP BY i.type
+            SELECT 'type_counts', NULL, type, NULL, COUNT(*)
+            FROM matched
+            GROUP BY type
             UNION ALL
-            SELECT 'category_counts', NULL, NULL, i.category, COUNT(*)
-            FROM insights_info i
-            WHERE i.account_id = :accountId
-              AND i.forensic_info_id = :investigationId
-              AND i.original_insight_time BETWEEN :after AND :before
-              AND (i.type      ILIKE :search
-                OR i.category  ILIKE :search
-                OR i.description ILIKE :search)
-            GROUP BY i.category
+            SELECT 'category_counts', NULL, NULL, category, COUNT(*)
+            FROM matched
+            GROUP BY category
         """;
 
         Query query = entityManager.createNativeQuery(sql);
