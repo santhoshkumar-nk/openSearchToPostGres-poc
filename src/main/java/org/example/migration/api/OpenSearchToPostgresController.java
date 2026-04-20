@@ -155,6 +155,22 @@ public class OpenSearchToPostgresController {
         return ResponseEntity.ok(migrationService.statsByWildcardSearch(before, after, terms, timezoneId, lookupAccountId()));
     }
 
+    // Handles GET requests to fetch statistics using PostgreSQL full-text search (tsvector/tsquery)
+    // Requires 'search' query param (e.g. ?search=Informational) and 'forensicInfo.keyword' for investigationId
+    // Uses a GIN-indexed tsvector column for fast full-text search aggregation
+    @GetMapping("/statsByFullTextTsvector")
+    public ResponseEntity<AggregationRoot> statsByFullTextTsvector(
+                    @RequestParam(value = "after", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date after,
+                    @RequestParam(value = "before", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Date before,
+                    @RequestParam Map<String, String> terms,
+                    @RequestHeader(value = "Z-Client-Timezone", defaultValue = "UTC") String timezoneId,
+                    HttpServletRequest request) throws OpenSearchToPostgresException {
+
+        log.debug("Processing statsByFullTextTsvector GET {}?{}", request.getRequestURL(), request.getQueryString());
+
+        return ResponseEntity.ok(migrationService.statsByFullTextTsvector(before, after, terms, timezoneId, lookupAccountId()));
+    }
+
     // Placeholder for lookupAccountId (implement as needed)
     private String lookupAccountId() {
         // TODO: Implement account ID lookup logic

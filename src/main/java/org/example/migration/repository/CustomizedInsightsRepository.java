@@ -17,5 +17,5 @@ public interface CustomizedInsightsRepository {
     // Used when a search term is present — queries insights_info directly with ILIKE filter
     AggregationRoot aggregateInsightsWithSearchFilter(String accountId, String investigationId, Date after, Date before, String searchTerm, Map<String, String> terms);
 
-    AggregationRoot aggregateInsightsFromTimescaleDB(String accountId, String investigationId, Date after, Date before);
+    AggregationRoot aggregateInsightsWithFullTextTsvector(String accountId, String investigationId, Date after, Date before, String searchTerm, Map<String, String> terms);
 }

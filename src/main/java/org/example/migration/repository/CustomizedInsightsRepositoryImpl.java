@@ -450,48 +450,69 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
     // Aggregates insights using TimescaleDB continuous aggregate (ca_insights_daily)
     @Transactional(readOnly = true)
     @Override
-    public AggregationRoot aggregateInsightsFromTimescaleDB(String accountId, String investigationId, Date after, Date before) {
+    public AggregationRoot aggregateInsightsWithFullTextTsvector(String accountId, String investigationId,
+                                                            Date after, Date before, String searchTerm, Map<String, String> terms) {
         long start = System.currentTimeMillis();
 
+        // Strip only the wildcard suffix; tsquery handles tokenization
+        String tsSearchTerm = searchTerm.replace("*", "").trim();
+
+        // Convert "Informational*" → "Informational:*" for prefix matching
+        //String tsSearchTerm = searchTerm.endsWith("*") ? searchTerm.replace("*", "") + ":*" : searchTerm;
+
+
+        // Build filter SQL fragment only when "query" key is present in terms
+        // e.g. query=type=in=(ioc,suspicious) → AND LOWER(type) IN (LOWER(:fv_0), LOWER(:fv_1))
+        RSQLNativeSqlBuilder.RSQLFilterResult rsqlFilterResult = buildRSQLFilterFragment(terms);
+
+        // CTE 'matched' scans insights_info ONCE and is reused by all three aggregations,
+        // avoiding 3 separate sequential scans of the same filtered dataset.
+
         String sql = """
+            WITH matched AS (
+                SELECT original_insight_time, type, category
+                FROM insights_info
+                WHERE account_id = :accountId
+                  AND forensic_info_id = :investigationId
+                  AND original_insight_time BETWEEN :after AND :before
+                  AND search_vector @@ plainto_tsquery('english', :search)
+            """ + rsqlFilterResult.fragment() + """
+            )
             SELECT 'date_histogram' AS agg_type,
-                   to_char(period, 'YYYY-MM-DD HH24:MI:SS') AS key,
+                    original_insight_time AS key,
                    NULL AS type,
                    NULL AS category,
-                   SUM(doc_count) AS doc_count
-            FROM ca_insights_daily
-            WHERE account_id = :accountId
-              AND forensic_info_id = :investigationId
-              AND period BETWEEN :after AND :before
-            GROUP BY period
+                   COUNT(*) AS doc_count
+            FROM matched
+            GROUP BY original_insight_time
             UNION ALL
-            SELECT 'type_counts', NULL, type, NULL, SUM(doc_count)
-            FROM ca_insights_daily
-            WHERE account_id = :accountId
-              AND forensic_info_id = :investigationId
-              AND period BETWEEN :after AND :before
+            SELECT 'type_counts', NULL, type, NULL, COUNT(*)
+            FROM matched
             GROUP BY type
             UNION ALL
-            SELECT 'category_counts', NULL, NULL, category, SUM(doc_count)
-            FROM ca_insights_daily
-            WHERE account_id = :accountId
-              AND forensic_info_id = :investigationId
-              AND period BETWEEN :after AND :before
+            SELECT 'category_counts', NULL, NULL, category, COUNT(*)
+            FROM matched
             GROUP BY category
         """;
+
 
         Query query = entityManager.createNativeQuery(sql);
         query.setParameter("accountId", accountId);
         query.setParameter("investigationId", investigationId);
         query.setParameter("after", after);
         query.setParameter("before", before);
+        query.setParameter("search", tsSearchTerm);
+
+        // Bind filter values dynamically (only when query term is present)
+        rsqlFilterResult.params().forEach(query::setParameter);
 
         @SuppressWarnings("unchecked")
         List<Object[]> results = query.getResultList();
         long queryElapsed = System.currentTimeMillis() - start;
-        log.info("TimescaleDB CA query returned {} rows in {}ms", results.size(), queryElapsed);
+        log.info("aggregateInsightsWithFullTexttsvector search='{}' returned {} rows in {}ms",
+                tsSearchTerm, results.size(), queryElapsed);
 
-        return buildAggregationRoot(results, after, before, start, queryElapsed, "aggregateInsightsFromTimescaleDB");
+        return buildAggregationRoot(results, after, before, start, queryElapsed, "aggregateInsightsWithFullTexttsvector");
     }
 
     /**

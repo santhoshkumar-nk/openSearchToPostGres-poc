@@ -216,15 +216,20 @@ public class ForensicInfoMigrationService {
         return insightsInfoRepository.aggregateInsightsFromMaterializedViews(accountId, investigationId, after, before,  searchTerm);
     }
 
-    // Aggregates insights using TimescaleDB continuous aggregates
-    public AggregationRoot statsByTimescaleDB(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
+    // Aggregates insights using statsByFullTextTsvector continuous aggregates
+    public AggregationRoot statsByFullTextTsvector(Date before, Date after, Map<String, String> terms, String timezoneId, String accountId) throws OpenSearchToPostgresException {
         String investigationId = validateAndGetInvestigationId(terms);
+
+        String searchTerm = terms.get("search");
+        if (StringUtils.isBlank(searchTerm)) {
+            throw new OpenSearchToPostgresException("A 'search' query parameter is required for wildcard search");
+        }
 
         Date[] bounds = resolveTimeBounds(accountId, investigationId, after, before);
         after = bounds[0];
         before = bounds[1];
 
-        return insightsInfoRepository.aggregateInsightsFromTimescaleDB(accountId, investigationId, after, before);
+        return insightsInfoRepository.aggregateInsightsWithFullTextTsvector(accountId, investigationId, after, before, searchTerm, terms);
     }
 
     /**
