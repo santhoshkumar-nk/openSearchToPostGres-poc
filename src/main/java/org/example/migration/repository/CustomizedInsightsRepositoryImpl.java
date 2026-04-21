@@ -457,8 +457,23 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         // Strip only the wildcard suffix; tsquery handles tokenization
         String tsSearchTerm = searchTerm.replace("*", "").trim();
 
-        // Convert "Informational*" → "Informational:*" for prefix matching
-        //String tsSearchTerm = searchTerm.endsWith("*") ? searchTerm.replace("*", "") + ":*" : searchTerm;
+
+        // Choose tsquery function and term based on input shape
+        String tsqueryFunction;
+        String tsQueryTerm;
+        if (searchTerm.endsWith("*")) { // Prefix match: "Informational*" → to_tsquery('english', 'Informational:*')
+            tsqueryFunction = "to_tsquery";
+            tsQueryTerm = tsSearchTerm + ":*";
+        } else if (tsSearchTerm.contains(" ")) {
+            // Multi-word / quoted phrases ("Indicator of Compromise") / exclusions (Abnormal -Informational)
+            tsqueryFunction = "websearch_to_tsquery";
+            tsQueryTerm = tsSearchTerm;
+        } else { // Single word — plainto_tsquery is simplest and fastest
+            tsqueryFunction = "plainto_tsquery";
+            tsQueryTerm = tsSearchTerm;
+        }
+
+        log.debug("tsvector search: function={}, term='{}'", tsqueryFunction, tsQueryTerm);
 
 
         // Build filter SQL fragment only when "query" key is present in terms
@@ -468,32 +483,36 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         // CTE 'matched' scans insights_info ONCE and is reused by all three aggregations,
         // avoiding 3 separate sequential scans of the same filtered dataset.
 
+        // Inject the chosen tsquery function directly — tsqueryFunction is internal, not user input
         String sql = """
-            WITH matched AS (
-                SELECT original_insight_time, type, category
-                FROM insights_info
-                WHERE account_id = :accountId
-                  AND forensic_info_id = :investigationId
-                  AND original_insight_time BETWEEN :after AND :before
-                  AND search_vector @@ plainto_tsquery('english', :search)
-            """ + rsqlFilterResult.fragment() + """
-            )
-            SELECT 'date_histogram' AS agg_type,
-                    original_insight_time AS key,
-                   NULL AS type,
-                   NULL AS category,
-                   COUNT(*) AS doc_count
-            FROM matched
-            GROUP BY original_insight_time
-            UNION ALL
-            SELECT 'type_counts', NULL, type, NULL, COUNT(*)
-            FROM matched
-            GROUP BY type
-            UNION ALL
-            SELECT 'category_counts', NULL, NULL, category, COUNT(*)
-            FROM matched
-            GROUP BY category
-        """;
+        WITH matched AS (
+            SELECT original_insight_time, type, category
+            FROM insights_info
+            WHERE account_id = :accountId
+              AND forensic_info_id = :investigationId
+              AND original_insight_time BETWEEN :after AND :before
+              AND search_vector @@ \
+        """ + tsqueryFunction + """
+        ('english', :search)
+        """ + rsqlFilterResult.fragment() + """
+            LIMIT 50000
+        )
+        SELECT 'date_histogram' AS agg_type,
+                original_insight_time AS key,
+               NULL AS type,
+               NULL AS category,
+               COUNT(*) AS doc_count
+        FROM matched
+        GROUP BY original_insight_time
+        UNION ALL
+        SELECT 'type_counts', NULL, type, NULL, COUNT(*)
+        FROM matched
+        GROUP BY type
+        UNION ALL
+        SELECT 'category_counts', NULL, NULL, category, COUNT(*)
+        FROM matched
+        GROUP BY category
+    """;
 
 
         Query query = entityManager.createNativeQuery(sql);
@@ -501,16 +520,24 @@ public class CustomizedInsightsRepositoryImpl implements CustomizedInsightsRepos
         query.setParameter("investigationId", investigationId);
         query.setParameter("after", after);
         query.setParameter("before", before);
-        query.setParameter("search", tsSearchTerm);
+        query.setParameter("search", tsQueryTerm);
 
         // Bind filter values dynamically (only when query term is present)
         rsqlFilterResult.params().forEach(query::setParameter);
 
+
+        //ts_rank for Relevance Ordering Results are not ranked by relevance.
+        // High-noise matches are treated equally to high-relevance ones.
+        //No risks of long-running queries holding resources.
+        query.setHint("org.hibernate.readOnly", true);
+        query.setHint("jakarta.persistence.query.timeout", 10000);
+
+
         @SuppressWarnings("unchecked")
         List<Object[]> results = query.getResultList();
         long queryElapsed = System.currentTimeMillis() - start;
-        log.info("aggregateInsightsWithFullTexttsvector search='{}' returned {} rows in {}ms",
-                tsSearchTerm, results.size(), queryElapsed);
+        log.info("aggregateInsightsWithFullTextTsvector function={} search='{}' returned {} rows in {}ms",
+                tsqueryFunction, tsQueryTerm, results.size(), queryElapsed);
 
         return buildAggregationRoot(results, after, before, start, queryElapsed, "aggregateInsightsWithFullTexttsvector");
     }
